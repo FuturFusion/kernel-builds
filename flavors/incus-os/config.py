@@ -629,7 +629,6 @@ enable_by_prefix("MLXREG_")                       # Mellanox register-access pla
 enable_by_prefix("ADT7316")                       # ADT7316/7516 sensor (core + I2C/SPI variants)
 enable_by_prefix("ZL3073X")                       # Microchip ZL3073x clock/timing (core + I2C/SPI)
 enable_by_prefix("RAVE_SP_")                      # RAVE supervisory-processor MFD drivers
-enable_by_prefix("MOXA_")                         # Moxa Intellio/Smartio multiport serial
 enable_by_prefix("MIPI_I3C")                      # MIPI I3C host-controller interface
 
 # Virtualization guest/host driver menus -- all three are menuconfig gates
@@ -864,10 +863,8 @@ _VALIDATION_ONLY_TRISTATE_UMBRELLAS = [
     # and friends. Confirmed via checkpoint tracing: I2C was correct
     # right after the MFD sweep, then wrong by the time this loop had run.
     "SPI",
-    "NFC",
     "MMC",
     "HID",
-    "INPUT",
     "POWER_SUPPLY",
     "TYPEC",
 ]
