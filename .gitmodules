@@ -1,0 +1,6 @@
+[submodule "yocto-kernel-tools"]
+	path = yocto-kernel-tools
+	url = https://git.yoctoproject.org/yocto-kernel-tools
+[submodule "kernel-hardening-checker"]
+	path = kernel-hardening-checker
+	url = https://github.com/a13xp0p0v/kernel-hardening-checker.git

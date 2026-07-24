@@ -1,0 +1,169 @@
+name: Generate kernel config
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      kernel_version:
+        description: "Kernel version to configure against (default: read from misc/zabbly-config)"
+        required: false
+        type: string
+      normalize:
+        description: "Also normalize through the real Kconfig (make olddefconfig + savedefconfig)"
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  generic:
+    name: generic flavor
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install kernel build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential flex bison bc libelf-dev libssl-dev dwarves python3
+
+      # misc/zabbly-config states the kernel it was built for in its header
+      # ("# Linux/x86 <version> Kernel Configuration"), so derive the version
+      # from it rather than hardcoding one that would silently drift.
+      - name: Determine kernel version
+        id: kver
+        run: |
+          set -euo pipefail
+          version="${{ inputs.kernel_version }}"
+          if [ -z "$version" ]; then
+            version="$(sed -n 's|^# Linux/x86 \([0-9][0-9.]*\) Kernel Configuration$|\1|p' \
+                       misc/zabbly-config | head -1)"
+          fi
+          if [ -z "$version" ]; then
+            echo "error: could not determine the kernel version from misc/zabbly-config" >&2
+            exit 1
+          fi
+          echo "Configuring against Linux $version"
+          echo "version=$version"        >> "$GITHUB_OUTPUT"
+          echo "major=${version%%.*}"    >> "$GITHUB_OUTPUT"
+
+      # Cache the extracted source tree: it is a few hundred MB of pure
+      # download+unpack that never changes for a given released version, so the
+      # key needs no hash beyond the version itself.
+      - name: Cache kernel source tree
+        id: kernel-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/kernel/linux-${{ steps.kver.outputs.version }}
+          key: linux-src-${{ steps.kver.outputs.version }}
+
+      - name: Download kernel source tree
+        if: steps.kernel-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          v="${{ steps.kver.outputs.version }}"
+          url="https://cdn.kernel.org/pub/linux/kernel/v${{ steps.kver.outputs.major }}.x/linux-${v}.tar.xz"
+          mkdir -p ~/kernel
+          echo "Fetching $url"
+          curl -fSL --retry 3 "$url" | tar -xJ -C ~/kernel
+          test -f ~/kernel/linux-"$v"/Makefile
+
+      # Same step a human does per the README: copy the template, point it at
+      # this machine's paths.
+      - name: Create .env
+        run: |
+          set -euo pipefail
+          sed -e "s|^KERNEL_TREE_PATH=.*|KERNEL_TREE_PATH=$HOME/kernel/linux-${{ steps.kver.outputs.version }}|" \
+              -e "s|^KERNEL_TREE_BUILD_PATH=.*|KERNEL_TREE_BUILD_PATH=$RUNNER_TEMP/kernel-build|" \
+              .env.example > .env
+          cat .env
+
+      - name: Check each flavor's config_slices are disjoint
+        run: ./check_slices.py
+
+      # The flag is passed explicitly rather than left to .env.example, so CI
+      # behaviour cannot change as a side effect of editing that template. The
+      # runner does have the build dependencies, so normalization is a
+      # workflow_dispatch option rather than something that cannot run here.
+      - name: Generate the generic config
+        run: |
+          if [ "${{ inputs.normalize }}" = "true" ]; then
+            ./genconfig.sh generic --normalize
+          else
+            ./genconfig.sh generic --no-normalize
+          fi
+
+      - name: Show diff against the reference config
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ ! -f output/diff ]; then
+            echo "output/diff was not produced -- the generation step must have failed."
+            exit 1
+          fi
+
+          lines=$(wc -l < output/diff)
+          echo "::notice::output/diff is $lines line(s)"
+
+          {
+            echo "## Diff vs misc/zabbly-config ($lines lines)"
+            echo
+            echo 'Left column is misc/zabbly-config, right column is our generated config.'
+            echo
+            echo 'Some divergence is expected here and not a regression: the'
+            echo 'reference config was built with a different compiler, so'
+            echo '`CC_VERSION_TEXT` and any gcc-version-gated symbols will differ'
+            echo 'from what this runner produces.'
+            echo
+            echo '```diff'
+            cat output/diff
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "----- output/diff -----"
+          cat output/diff
+          echo "-----------------------"
+
+      # Informational only. kernel-hardening-checker exits 0 whatever the
+      # verdicts are and non-zero only when it cannot run, so simply not
+      # swallowing its status gives exactly the behaviour we want: FAIL lines
+      # are reported, a broken tool breaks the build.
+      - name: Check config hardening
+        run: |
+          set -euo pipefail
+          ./check-config-hardening.sh | tee output/hardening.txt
+
+          echo "::notice::$(grep -F '[+] Check is finished:' output/hardening.txt \
+                            || echo 'hardening check finished')"
+
+          {
+            echo "## Hardening check"
+            echo
+            echo 'Reported, not enforced: the generic flavor targets parity with a'
+            echo 'general-purpose distro kernel, which is nowhere near a hardened'
+            echo 'one, so FAIL lines here are expected. This step fails only if'
+            echo 'kernel-hardening-checker itself errors out.'
+            echo
+            echo '<details><summary>Full report</summary>'
+            echo
+            echo '```'
+            cat output/hardening.txt
+            echo '```'
+            echo
+            echo '</details>'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload generated config and analysis
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: generic-config
+          path: |
+            generated_config
+            output/
+          if-no-files-found: warn
