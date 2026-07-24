@@ -74,13 +74,6 @@ kconf = start()
 # distributed into config_slices/. See this flavor's config_slices/.)
 # ============================================================================
 
-# RC_CORE (remote-control core) needs a real subtree walk rather than a bare
-# set: DVB_USB and VIDEO_CX88 depend on it, and it has a driver family of its
-# own underneath (the IR_* receiver/decoder drivers). Setting only the top
-# switch is why 32 IR_* symbols once showed up as "never attempted" while
-# RC_CORE itself read as correctly on.
-enable_umbrella("RC_CORE", 1, label="RC_CORE")
-
 # Two master gates that used to be bare CONFIG_X=y data lines. They are set
 # here, early, because everything downstream depends on them being on -- but
 # deliberately NOT walked. enable_umbrella() was tried here first
@@ -93,7 +86,7 @@ enable_umbrella("RC_CORE", 1, label="RC_CORE")
 # further down. RAPIDIO is handled by its existing umbrella near the bus
 # families instead -- it is a tristate, and a second call here would just be
 # clobbered by that one anyway.
-enable_exact(("STAGING", 2), ("ACCESSIBILITY", 2))
+enable_exact(("STAGING", 2))
 
 # Two more flat families that were sitting in zabbly_exact_values.config as
 # 11 individual lines. Both are pure "=m driver zoo under a plain menu", which
@@ -178,10 +171,6 @@ if "KERNEL_ZSTD" in kconf.syms:
 #     Confirmed via zabbly-config: CONFIG_PREEMPT=y.
 if "PREEMPT" in kconf.syms:
     kconf.syms["PREEMPT"].set_value(2)  # y
-
-# --- GREYBUS: Project Ara / Greybus protocol subsystem, also under
-#     staging -- confirmed via zabbly-config (CONFIG_GREYBUS=m).
-enable_umbrella("GREYBUS", 1, label="GREYBUS")
 
 # --- Embedded-controller platform drivers: real and confirmed via
 # zabbly-config, added per explicit request despite being company/laptop-
@@ -307,11 +296,6 @@ enable_by_prefix("COMMON_CLK_")
 # now that STAGING is on. Umbrella walk should reach the whole family.
 enable_umbrella("GPIB", 1, label="GPIB")
 
-# --- GREYBUS: the umbrella itself (=m) was already correctly set, but
-# none of its 18 children were ever reached -- same "separate menu, not
-# nested" shape as several families before. Prefix sweep instead.
-enable_by_prefix("GREYBUS_")
-
 # ============================================================================
 # Sixth batch: reset controllers, generic PHY framework, NTB, NVMEM.
 # ============================================================================
@@ -370,7 +354,6 @@ enable_umbrella("PSE_CONTROLLER", 2, label="PSE_CONTROLLER")
 # --- Networking diagnostics / TLS offload
 
 enable_umbrella("RIONET", 1, label="RIONET")
-enable_umbrella("ARCNET", 1, label="ARCNET")
 
 # --- I2C bus controller drivers: drivers/i2c/busses/Kconfig uses a plain
 # `menu "I2C Hardware Bus support"` with NO controlling symbol -- same
@@ -684,7 +667,6 @@ enable_umbrella("XILLYBUS", 1, label="XILLYBUS")  # generic FPGA interface bus
 enable_umbrella("HDLC", 1, label="HDLC")          # generic HDLC + per-protocol drivers
 enable_umbrella("B53", 1, label="B53")            # Broadcom BCM53xx DSA switch family
 enable_umbrella("TARGET_CORE", 1, label="TARGET_CORE")  # LIO SCSI/iSCSI/FC target + TCM_* backstores
-enable_umbrella("CHROME_PLATFORMS", 2, label="CHROME_PLATFORMS")  # ChromeOS platform: CROS_*/CHROMEOS_*
 enable_umbrella("SLIP", 1, label="SLIP")          # SLIP net driver (parent for the SLIP_* options below)
 enable_by_prefix("SERIO_")                        # input serio port drivers (siblings, no gate)
 enable_by_prefix("SLIP_")                         # SLIP line-discipline compression options
@@ -694,7 +676,6 @@ enable_by_prefix("ZL3073X")                       # Microchip ZL3073x clock/timi
 enable_by_prefix("RAVE_SP_")                      # RAVE supervisory-processor MFD drivers
 enable_by_prefix("MOXA_")                         # Moxa Intellio/Smartio multiport serial
 enable_by_prefix("MIPI_I3C")                      # MIPI I3C host-controller interface
-enable_by_prefix("SURFACE_")                      # MS Surface platform drivers (SURFACE_PLATFORMS gate is default-y)
 
 # Virtualization guest/host driver menus -- all three are menuconfig gates
 # (VIRTIO_MENU/VHOST_MENU default y, VDPA is tristate) whose child driver
@@ -766,9 +747,7 @@ enable_umbrella("MEMORY", 2, label="MEMORY")           # memory-controller drive
 enable_umbrella("HTE", 2, label="HTE")                 # hardware timestamping engine
 enable_umbrella("TEE", 1, label="TEE")                 # Trusted Execution Environment (AMDTEE on x86)
 enable_umbrella("FWCTL", 1, label="FWCTL")             # firmware control: FWCTL_BNXT/MLX5/PDS
-enable_umbrella("MHI_BUS", 1, label="MHI_BUS")         # Qualcomm MHI bus; also the missing prerequisite for PCI_EPF_MHI
 enable_by_prefix("EEPROM_")                            # I2C/SPI EEPROM drivers sit under a plain `menu`, no gate to walk from
-enable_umbrella("DRM_ACCEL", 2, label="DRM_ACCEL")     # compute-accelerator drivers: AMDXDNA/HABANALABS/IVPU/QAIC
 enable_umbrella("DMABUF_HEAPS", 2, label="DMABUF_HEAPS")  # dma-buf exporter heaps (SYSTEM, and TEE_DMABUF_HEAPS via TEE above)
 enable_umbrella("SIOX", 1, label="SIOX")               # Eckelmann SIOX bus (+ SIOX_BUS_GPIO, GPIO_SIOX)
 enable_umbrella("DLM", 1, label="DLM")                 # distributed lock manager -- the prerequisite for GFS2_FS_LOCKING_DLM
@@ -782,7 +761,7 @@ enable_menu("EFI (Extensible Firmware Interface) Support")  # EFI_BOOTLOADER_CON
 enable_menu("VFIO support for PCI devices")            # the per-vendor VFIO variant drivers (MLX5/PDS/QAT/XE) + NOIOMMU/PCI_VGA
 enable_menu("Kernel hardening options")                # FORTIFY_SOURCE, HARDENED_USERCOPY, INIT_ON_ALLOC_DEFAULT_ON, PAGE_POISONING, ZERO_CALL_USED_REGS
 enable_umbrella("POWERCAP", 2, label="POWERCAP")       # INTEL_RAPL(+TPMI), DTPM
-enable_exact(("MHI_BUS_EP", 1), ("NTB_NETDEV", 1))     # single tristates with no menu or prefix to hang off
+enable_exact(("NTB_NETDEV", 1))     # single tristates with no menu or prefix to hang off
 enable_by_prefix("MUX_")                               # drivers/mux: MULTIPLEXER is a plain config, so its chip drivers aren't nested under it
 enable_by_prefix("RPMSG_")                             # same shape for RPMSG: CHAR/CTRL/TTY/QCOM_GLINK_RPM are `depends on RPMSG` siblings
 
@@ -927,7 +906,6 @@ _VALIDATION_ONLY_TRISTATE_UMBRELLAS = [
     "USB",
     "FB",
     "MTD",
-    "IIO",
     # "I2C" removed from this generic list -- it needs to stay =y
     # specifically (not =m) because several MFD parent chips depend on
     # I2C=y strictly, and this generic loop's "set to m if tristate"
@@ -939,7 +917,6 @@ _VALIDATION_ONLY_TRISTATE_UMBRELLAS = [
     "NFC",
     "MMC",
     "HID",
-    "W1",
     "INPUT",
     "POWER_SUPPLY",
     "TYPEC",
