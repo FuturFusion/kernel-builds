@@ -172,30 +172,6 @@ if "KERNEL_ZSTD" in kconf.syms:
 if "PREEMPT" in kconf.syms:
     kconf.syms["PREEMPT"].set_value(2)  # y
 
-# --- Embedded-controller platform drivers: real and confirmed via
-# zabbly-config, added per explicit request despite being company/laptop-
-# specific (CROS_EC=Chromebook, WILCO_EC=Google's Chrome Enterprise
-# laptop line, SURFACE_AGGREGATOR=Microsoft Surface, FSI=IBM POWER
-# service interface). None of these matter for a real x86 server
-# deployment, but they're legitimate umbrellas we simply hadn't added.
-# CHROME_PLATFORMS is the master gate for the whole ChromeOS platform
-# driver directory (CROS_EC, CHROMEOS_*, WILCO_EC, CROS_EC_TYPEC, etc.)
-# -- confirmed still off despite everything downstream being configured
-# for many rounds now. This is almost certainly why the entire family
-# showed up as completely ABSENT rather than just capped.
-enable_umbrella("CROS_EC", 1, label="CROS_EC")
-
-# CROS_EC has resisted many rounds of investigation -- some legacy
-# children (CROS_EC_CHARDEV, etc.) depend on MFD_CROS_EC specifically
-# rather than CROS_EC directly. Our MFD_ prefix sweep should already
-# reach it, but forcing it explicitly here too as a targeted retry.
-
-# --- CHROMEOS_* platform drivers: simpler than the CROS_EC/MFD_CROS_EC
-# family, mostly just depend on ACPI (already on). Never touched.
-enable_umbrella("WILCO_EC", 1, label="WILCO_EC")
-enable_umbrella("SURFACE_AGGREGATOR", 1, label="SURFACE_AGGREGATOR")
-enable_umbrella("FSI", 1, label="FSI")
-
 # --- Raw-NAND flash filesystems. UBIFS_FS depends on MTD_UBI (the UBI
 # volume-management layer), a separate umbrella we hadn't touched.
 enable_umbrella("MTD_UBI", 1, label="MTD_UBI")
@@ -221,13 +197,6 @@ enable_umbrella("INET_DIAG", 1, label="INET_DIAG")
 # controller drivers (I2C_DESIGNWARE_PLATFORM/_PCI/_BAYTRAIL) are
 # separate sibling symbols depending on it, never independently touched.
 enable_umbrella("I2C_DESIGNWARE_CORE", 2, label="I2C_DESIGNWARE_CORE")
-
-# --- BT_HCIUART: the real prerequisite for BT_HCIUART_BCM/BT_QCA (UART-
-# attached Bluetooth controllers), never touched.
-# --- BT_HCIUART's real prerequisite: SERIAL_DEV_BUS (the serdev
-# framework for attaching devices to serial ports), confirmed real via
-# zabbly-config and never touched.
-enable_umbrella("BT_HCIUART", 1, label="BT_HCIUART")
 
 # ============================================================================
 # Batch from a raw diff -y chunk against zabbly-config (init/Kconfig,
@@ -435,14 +404,6 @@ enable_umbrella("PWM", 2, label="PWM")
 #     fragment, rather than the whole subtree being walked.
 enable_umbrella("USB_GADGET", 1, label="USB_GADGET")
 
-# --- CAN: same sibling-umbrella shape as ETHERNET/USB_NET_DRIVERS. CAN
-#     (net/can/Kconfig) covers only the protocol layer (CAN_RAW, CAN_BCM,
-#     CAN_GW). The actual vendor CAN controller/adapter drivers
-#     (CAN_PEAK_USB, CAN_KVASER_USB, CAN_GS_USB, CAN_FLEXCAN, ...) live
-#     under CAN_DEV, a SEPARATE menuconfig in drivers/net/Kconfig,
-#     confirmed via Kconfig source -- never walked before now.
-enable_umbrella("CAN_DEV", 1, label="CAN_DEV")
-
 # --- NET_DSA: net/dsa/Kconfig's own NET_DSA umbrella only covers tagging
 #     protocol drivers (NET_DSA_TAG_*), already reached. The vendor
 #     switch-chip drivers (NET_DSA_REALTEK, NET_DSA_MICROCHIP_KSZ_COMMON,
@@ -478,12 +439,6 @@ enable_umbrella("IP_SET", 1, label="IP_SET")
 #     sockopt interface gated by NETFILTER_XTABLES_LEGACY, which we
 #     already turned on separately for the same byte-parity reasons).
 enable_umbrella("BRIDGE_NF_EBTABLES", 1, label="BRIDGE_NF_EBTABLES")
-
-# BRIDGE_NF_EBTABLES_LEGACY: the old sockopt/eval-loop ebtables path,
-# depends on NETFILTER_XTABLES_LEGACY (already established via the
-# fragment) + BRIDGE_NF_EBTABLES (just above). Covers BRIDGE_EBT_BROUTE/
-# T_FILTER/T_NAT as children.
-enable_umbrella("BRIDGE_NF_EBTABLES_LEGACY", 1, label="BRIDGE_NF_EBTABLES_LEGACY")
 
 # IP_NF_ARPTABLES: legacy arptables, a third family alongside
 # IP_NF_IPTABLES/IP6_NF_IPTABLES that was never explicitly touched.
@@ -722,14 +677,10 @@ enable_by_prefix("USB4_")                              # USB4_NET lives under dr
 enable_umbrella("EVM", 2, label="EVM")                 # Extended Verification Module (integrity xattr protection)
 enable_by_prefix("EVM_")                               # ATTR_FSUUID/ADD_XATTRS/EXTRA_SMACK_XATTRS are `depends on EVM` siblings
 enable_exact(("HARDLOCKUP_DETECTOR", 2))               # NMI hard-lockup detector; the _PERF/_COUNTS_HRTIMER/_ARCH/_BUDDY sub-symbols are promptless and resolve themselves
-enable_umbrella("MEMSTICK", 1, label="MEMSTICK")       # Sony Memory Stick: TIFM_MS/JMICRON_38X/R592/REALTEK_USB
 enable_umbrella("JFS_FS", 1, label="JFS_FS")
 enable_by_prefix("JFS_")                               # POSIX_ACL/SECURITY/STATISTICS are `depends on JFS_FS` siblings
 enable_umbrella("AFS_FS", 1, label="AFS_FS")
 enable_by_prefix("AFS_")                               # AFS_FSCACHE
-enable_umbrella("PANEL", 1, label="PANEL")             # parallel-port LCD panel; selects CHARLCD
-enable_by_prefix("PANEL_")
-enable_by_prefix("CHARLCD")
 enable_umbrella("FW_CFG_SYSFS", 1, label="FW_CFG_SYSFS")  # QEMU fw_cfg sysfs interface
 
 # --- Menuconfig gates that were already at the right value but had never been
@@ -737,7 +688,6 @@ enable_umbrella("FW_CFG_SYSFS", 1, label="FW_CFG_SYSFS")  # QEMU fw_cfg sysfs in
 # already-correct gate is not a no-op: the walk is the point.
 enable_umbrella("MISC_FILESYSTEMS", 2, label="MISC_FILESYSTEMS")  # ADFS/AFFS/BEFS/BFS/CODA/EFS/GFS2/HFS(+PLUS)/HPFS/MINIX/NILFS2/OMFS/ORANGEFS/QNX4/QNX6/UFS/VBOXSF/VXFS/ECRYPT
 enable_umbrella("DMADEVICES", 2, label="DMADEVICES")   # dmaengine drivers: IOAT/IDMA64/PTDMA/QDMA/DW(+AXI)/PLX/SWITCHTEC/ALTERA/XILINX (SoC ones cap on x86)
-enable_umbrella("AUXDISPLAY", 2, label="AUXDISPLAY")   # character LCD / LED display drivers: HD44780/HT16K33/KS0108/LCD2S/MAX6959/IMG_ASCII_LCD/SEG_LED_GPIO
 enable_umbrella("MULTIPLEXER", 2, label="MULTIPLEXER") # MUX_ADG792A/ADGS1408/GPIO/MMIO
 enable_umbrella("PM_DEVFREQ", 2, label="PM_DEVFREQ")   # devfreq governors: SIMPLE_ONDEMAND/PERFORMANCE/POWERSAVE/USERSPACE/PASSIVE
 enable_umbrella("RPMSG", 1, label="RPMSG")             # remote-processor messaging: CHAR/CTRL/TTY/QCOM_GLINK
@@ -940,9 +890,6 @@ if "MEDIA_SUPPORT_FILTER" in kconf.syms:
     # keeps the filter ON and enables each category individually, rather than
     # disabling the filter entirely. Both approaches unlock the same media
     # drivers practically, but only this one is byte-identical to zabbly.
-    kconf.syms["MEDIA_CAMERA_SUPPORT"].set_value(2)
-    kconf.syms["MEDIA_ANALOG_TV_SUPPORT"].set_value(2)
-    kconf.syms["MEDIA_DIGITAL_TV_SUPPORT"].set_value(2)
     kconf.syms["MEDIA_RADIO_SUPPORT"].set_value(2)
     kconf.syms["MEDIA_SDR_SUPPORT"].set_value(2)
 
@@ -977,20 +924,6 @@ if "X86_INTEL_LPSS" in kconf.syms:
 if "MEDIA_USB_SUPPORT" in kconf.syms:
     kconf.syms["MEDIA_USB_SUPPORT"].set_value(2)  # y
 
-# Older pre-v2 USB DVB tuner framework core -- nested under
-# MEDIA_USB_SUPPORT (per its Kconfig structure), so this MUST come after
-# the line above. It was previously positioned much earlier in this file,
-# before MEDIA_USB_SUPPORT existed, which silently capped the entire
-# DVB_USB subtree for a whole round -- an ordering bug, not a real
-# Kconfig-dependency mystery.
-enable_umbrella("DVB_USB", 1, label="DVB_USB")
-
-# VIDEO_CX88 needed an explicit re-attempt here (after MEDIA_USB_SUPPORT
-# and RC_CORE are both established) since MEDIA_SUPPORT's own earlier
-# walk ran before RC_CORE was set.
-if "VIDEO_CX88" in kconf.syms:
-    kconf.syms["VIDEO_CX88"].set_value(1)  # m
-
 # USB network adapters (USB_NET_CDCETHER, USB_NET_SMSC95XX, ...) live in
 # drivers/net/usb/Kconfig, sourced from drivers/net/Kconfig -- a sibling
 # menu, not nested inside USB's own subtree, so walking USB alone never
@@ -1002,11 +935,6 @@ enable_umbrella("USB_NET_DRIVERS", 1, label="USB_NET_DRIVERS")
 # separated out so the type isn't hidden in the list above.
 for name in ("REGULATOR", "X86_PLATFORM_DEVICES"):
     enable_umbrella(name, 2)   # y -- these are bool umbrellas
-
-# COMEDI: lives in drivers/staging. Reverses the staging-exclusion stance
-# from earlier in this project -- included ONLY for byte-parity, never in
-# production.
-enable_umbrella("COMEDI", 1, label="COMEDI")
 
 # ============================================================================
 # END VALIDATION-ONLY BLOCK
