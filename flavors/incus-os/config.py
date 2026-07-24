@@ -207,15 +207,6 @@ enable_umbrella("WILCO_EC", 1, label="WILCO_EC")
 enable_umbrella("SURFACE_AGGREGATOR", 1, label="SURFACE_AGGREGATOR")
 enable_umbrella("FSI", 1, label="FSI")
 
-# --- Speakup screen-reader accessibility hardware drivers.
-# ACCESSIBILITY is the master gate for the whole drivers/accessibility/
-# directory -- SPEAKUP moved there after leaving drivers/staging/, and
-# this switch was never touched. Confirmed via a well-documented Ubuntu
-# bug report about exactly this same "moved out of staging, silently
-# disabled" issue. Same shape as STAGING/CHROME_PLATFORMS/
-# MELLANOX_PLATFORM before it.
-enable_umbrella("SPEAKUP", 1, label="SPEAKUP")
-
 # --- Raw-NAND flash filesystems. UBIFS_FS depends on MTD_UBI (the UBI
 # volume-management layer), a separate umbrella we hadn't touched.
 enable_umbrella("MTD_UBI", 1, label="MTD_UBI")
@@ -230,9 +221,6 @@ enable_umbrella("TIPC", 1, label="TIPC")
 # separate umbrella from SCSI_LOWLEVEL, genuinely relevant enterprise
 # storage/HBA hardware, never touched.
 enable_umbrella("FUSION", 2, label="FUSION")
-
-# --- IEEE 802.15.4 (Zigbee-like) wireless subsystem -- never touched.
-enable_umbrella("IEEE802154", 1, label="IEEE802154")
 
 # INET (fundamental TCP/IP support) was never explicitly set anywhere in
 # this script -- the real prerequisite for INET_DIAG, confirmed missing
@@ -372,12 +360,6 @@ enable_umbrella("PHYLIB", 2, label="PHYLIB")
 # genuinely relevant for PoE-capable network switches, never touched.
 enable_umbrella("PSE_CONTROLLER", 2, label="PSE_CONTROLLER")
 
-# --- IEEE802154 individual device drivers. The IEEE802154 umbrella above only
-# walks the PROTOCOL stack; the radio device drivers (ADF7242/AT86RF230/ATUSB/
-# CA8210/CC2520/MCR20A/MRF24J40 + FAKELB/HWSIM) live under a separate
-# IEEE802154_DRIVERS menuconfig (drivers/net/ieee802154). Walk it too.
-enable_umbrella("IEEE802154_DRIVERS", 1, label="IEEE802154_DRIVERS")
-
 # ============================================================================
 # Batch from a pasted raw diff chunk (left=zabbly, right=ours). Grouped
 # by area; almost all are core kernel/x86-platform options with no
@@ -449,18 +431,6 @@ enable_umbrella("PMIC_OPREGION", 2, label="PMIC_OPREGION")
 
 # --- OCFS2: cluster filesystem, real and never touched.
 enable_umbrella("OCFS2_FS", 1, label="OCFS2_FS")
-
-# --- Wireless LAN: never touched this whole session -- it was carried
-#     over from the production-exclusion list without questioning whether
-#     it belonged in the VALIDATION script too. It doesn't belong in
-#     production, but it does belong here for zabbly byte-parity. WLAN is
-#     the driver-list gate; CFG80211/MAC80211 are the 802.11
-#     configuration API and stack, sourced separately from net/wireless/,
-#     not nested inside WLAN's own subtree -- three separate umbrellas
-#     needed together, same shape as ETHERNET+USB_NET_DRIVERS earlier.
-enable_umbrella("WLAN", 2, label="WLAN")
-enable_umbrella("CFG80211", 1, label="CFG80211")
-enable_umbrella("MAC80211", 1, label="MAC80211")
 
 # --- Parallel port core support. This is the actual missing prerequisite
 #     for PATA_PARPORT's children (PATA_PARPORT_ATEN, _BPCK, etc.) -- we
@@ -553,13 +523,6 @@ enable_exact(("INET_SCTP_DIAG", 1), ("SCTP_DBG_OBJCNT", 0))  # DBG doesn't
 # --- RDS (Reliable Datagram Sockets) -- ties to our INFINIBAND/RDMA work.
 enable_umbrella("RDS", 1, label="RDS")
 enable_exact(("RDS_DEBUG", 0))  # same DBG/DEBUG naming gap as above
-
-# --- Standalone legacy protocol umbrellas, never touched.
-enable_umbrella("LLC2", 1, label="LLC2")
-enable_umbrella("ATALK", 1, label="ATALK")
-enable_umbrella("X25", 1, label="X25")
-enable_umbrella("LAPB", 1, label="LAPB")
-enable_umbrella("PHONET", 1, label="PHONET")
 
 # --- USB: turns out to be unusually fragmented -- Cadence (USB_CDNS_
 #     SUPPORT) and ChipIdea are THIRD-PARTY sibling umbrellas (separate
@@ -717,12 +680,6 @@ enable_umbrella("USB_DWC3", 1, label="USB_DWC3")
 enable_umbrella("USB_DWC2", 2, label="USB_DWC2")  # confirmed =y in zabbly
 enable_umbrella("USB_CHIPIDEA", 1, label="USB_CHIPIDEA")
 
-# --- ATM (legacy Asynchronous Transfer Mode networking protocol): the
-#     actual missing prerequisite for USB_ATM, which itself IS correctly
-#     nested inside our existing USB walk (drivers/usb/atm/Kconfig, inside
-#     "if USB") -- it just needs ATM turned on first.
-enable_umbrella("ATM", 1, label="ATM")
-
 # ============================================================================
 # Driver-family umbrellas/prefix sweeps -- each of these is a self-contained
 # driver zoo (a menuconfig gate with a uniform =m/=y child family, or a flat
@@ -735,10 +692,7 @@ enable_umbrella("BCMA", 1, label="BCMA")          # Broadcom SoC bus
 enable_umbrella("SSB", 1, label="SSB")            # Sonics Silicon Backplane bus
 enable_umbrella("RAPIDIO", 2, label="RAPIDIO")    # RapidIO interconnect + switches (=y: zabbly builds the bus in)
 enable_umbrella("XILLYBUS", 1, label="XILLYBUS")  # generic FPGA interface bus
-enable_umbrella("WWAN", 1, label="WWAN")          # mobile-broadband WAN core + modems
-enable_umbrella("WAN", 2, label="WAN")            # WAN category gate (needed for HDLC below)
 enable_umbrella("HDLC", 1, label="HDLC")          # generic HDLC + per-protocol drivers
-enable_umbrella("6LOWPAN_NHC", 1, label="6LOWPAN_NHC")  # 6LoWPAN header-compression modules
 enable_umbrella("B53", 1, label="B53")            # Broadcom BCM53xx DSA switch family
 enable_umbrella("TARGET_CORE", 1, label="TARGET_CORE")  # LIO SCSI/iSCSI/FC target + TCM_* backstores
 enable_umbrella("CHROME_PLATFORMS", 2, label="CHROME_PLATFORMS")  # ChromeOS platform: CROS_*/CHROMEOS_*
@@ -816,7 +770,6 @@ enable_umbrella("FW_CFG_SYSFS", 1, label="FW_CFG_SYSFS")  # QEMU fw_cfg sysfs in
 enable_umbrella("MISC_FILESYSTEMS", 2, label="MISC_FILESYSTEMS")  # ADFS/AFFS/BEFS/BFS/CODA/EFS/GFS2/HFS(+PLUS)/HPFS/MINIX/NILFS2/OMFS/ORANGEFS/QNX4/QNX6/UFS/VBOXSF/VXFS/ECRYPT
 enable_umbrella("DMADEVICES", 2, label="DMADEVICES")   # dmaengine drivers: IOAT/IDMA64/PTDMA/QDMA/DW(+AXI)/PLX/SWITCHTEC/ALTERA/XILINX (SoC ones cap on x86)
 enable_umbrella("AUXDISPLAY", 2, label="AUXDISPLAY")   # character LCD / LED display drivers: HD44780/HT16K33/KS0108/LCD2S/MAX6959/IMG_ASCII_LCD/SEG_LED_GPIO
-enable_umbrella("PCCARD", 1, label="PCCARD")           # PCMCIA/CardBus (zabbly ships it modular, defconfig builds it in)
 enable_umbrella("MULTIPLEXER", 2, label="MULTIPLEXER") # MUX_ADG792A/ADGS1408/GPIO/MMIO
 enable_umbrella("PM_DEVFREQ", 2, label="PM_DEVFREQ")   # devfreq governors: SIMPLE_ONDEMAND/PERFORMANCE/POWERSAVE/USERSPACE/PASSIVE
 enable_umbrella("RPMSG", 1, label="RPMSG")             # remote-processor messaging: CHAR/CTRL/TTY/QCOM_GLINK
@@ -834,7 +787,6 @@ enable_umbrella("SIOX", 1, label="SIOX")               # Eckelmann SIOX bus (+ S
 enable_umbrella("DLM", 1, label="DLM")                 # distributed lock manager -- the prerequisite for GFS2_FS_LOCKING_DLM
 enable_by_prefix("PVPANIC")                            # paravirtualized panic notifier: MMIO + PCI transports
 enable_by_prefix("AD525X_DPOT")                        # digital potentiometers: I2C + SPI halves
-enable_by_prefix("MOXTET")                             # Turris Mox module bus (+ GPIO_MOXTET)
 enable_by_prefix("QCOM_PMIC_GLINK")                    # Qualcomm PMIC GLINK (+ BATTERY_QCOM_BATTMGR, UCSI_PMIC_GLINK)
 enable_by_prefix("PCI_PWRCTRL")                        # PCI power-control slot drivers
 enable_exact(("SOC_BUS", 2), ("FW_LOADER_COMPRESS", 2))   # promptless-adjacent singletons; FW_LOADER_COMPRESS gates its XZ/ZSTD backends
@@ -882,9 +834,6 @@ enable_umbrella("BRIDGE", 1, label="BRIDGE")
 # --- net/dsa/Kconfig: embedded switch-chip drivers. No production case
 #     (essentially never present on x86 servers) -- validation-only.
 enable_umbrella("NET_DSA", 1, label="NET_DSA")
-
-# --- net/6lowpan/Kconfig + net/ieee802154/Kconfig
-enable_umbrella("6LOWPAN", 1, label="6LOWPAN")
 
 # --- net/sched/Kconfig: NET_SCHED is the real umbrella covering BOTH
 #     NET_CLS_* (classifiers) and NET_ACT_* (actions) -- NET_SCH_* queueing
@@ -948,13 +897,6 @@ enable_umbrella("IP_VS", 1, label="IP_VS")
 enable_umbrella("L2TP", 1, label="L2TP")
 
 #
-# Enable FireWire (IEEE 1394) controller/protocol drivers as modules.
-# Legacy consumer interconnect, essentially never present on real server
-# hardware -- validation-only, no production case for this one.
-#
-enable_umbrella("FIREWIRE", 1, label="FIREWIRE")
-
-#
 # Enable all SATA/PATA controller drivers as modules. Also genuinely
 # useful for production, not just zabbly-parity -- most non-NVMe server
 # storage still goes through libata.
@@ -1003,14 +945,11 @@ if "XDP_SOCKETS_DIAG" in kconf.syms:
 # Umbrellas verified directly against Kconfig source (menuconfig, correct
 # bool/tristate type):
 _VALIDATION_ONLY_TRISTATE_UMBRELLAS = [
-    "SOUND",           # also reaches SND (ALSA) -- nested in SOUND's own subtree
-    "DRM",
     "MEDIA_SUPPORT",
     "USB",
     "FB",
     "MTD",
     "IIO",
-    "BT",
     # "I2C" removed from this generic list -- it needs to stay =y
     # specifically (not =m) because several MFD parent chips depend on
     # I2C=y strictly, and this generic loop's "set to m if tristate"
