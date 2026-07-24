@@ -12,7 +12,7 @@ on:
       normalize:
         description: "Also normalize through the real Kconfig (make olddefconfig + savedefconfig)"
         required: false
-        default: false
+        default: true
         type: boolean
 
 jobs:
@@ -112,7 +112,7 @@ jobs:
       # workflow_dispatch option rather than something that cannot run here.
       - name: Generate the config
         run: |
-          if [ "${{ inputs.normalize }}" = "true" ]; then
+          if [ "${{ inputs.normalize }}" = "true" ] || [ -z "${{ inputs.normalize }}" ]; then
             ./genconfig.sh "$FLAVOR" --normalize
           else
             ./genconfig.sh "$FLAVOR" --no-normalize
