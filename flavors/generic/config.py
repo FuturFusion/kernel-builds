@@ -23,6 +23,11 @@ import sys
 
 import kconfiglib
 
+# This flavor's name is its directory name, so a flavor copied to a new
+# directory loads its OWN config_slices/ without anyone having to remember to
+# edit the load_slices() call below.
+FLAVOR = os.path.basename(os.path.dirname(os.path.abspath(__file__)))
+
 # genconfig.py lives at the repository root, two levels up from
 # flavors/<name>/config.py. Bootstrapping sys.path here rather than relying on
 # PYTHONPATH keeps a flavor runnable however it is launched.
@@ -1124,7 +1129,7 @@ enable_umbrella("COMEDI", 1, label="COMEDI")
 # rather than globbed. Check it stays overlap-free with ./check_slices.py.
 # ============================================================================
 load_slices(
-    "generic",
+    FLAVOR,
     "nf_tables",
     "platform",
     "filesystems",

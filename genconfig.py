@@ -412,7 +412,12 @@ def finish():
         # it can be cross-referenced against the actual missing-vs-zabbly diff
         # (via cross_reference.py) to separate real gaps from arch-irrelevant
         # noise, rather than eyeballing a truncated sample.
-        capped_path = here("output/capped_symbols.txt")
+        # genconfig.sh points this at output/<flavor>/ so flavors do not
+        # overwrite each other's analysis; the fallback keeps a flavor run by
+        # hand from failing on a missing directory.
+        out_dir = os.environ.get("GENCONFIG_OUTPUT_DIR") or here("output")
+        os.makedirs(out_dir, exist_ok=True)
+        capped_path = os.path.join(out_dir, "capped_symbols.txt")
         with open(capped_path, "w") as f:
             for label, name, val in _diagnostics["silently_capped"]:
                 f.write(f"{label}\tCONFIG_{name}\t{val}\n")

@@ -17,8 +17,8 @@ with.
 | Path | What it is |
 | --- | --- |
 | `genconfig.py` | The library: Kconfig tree-walking machinery. Sets no symbols; not runnable on its own. |
-| `flavors/generic/config.py` | A *flavor*: the policy for one kernel — what to switch on and why. |
-| `flavors/generic/config_slices/*.config` | The data half of that flavor: per-symbol policy no structural sweep can express. |
+| `flavors/<name>/config.py` | A *flavor*: the policy for one kernel — what to switch on and why. |
+| `flavors/<name>/config_slices/*.config` | The data half of that flavor: per-symbol policy no structural sweep can express. |
 | `genconfig.sh` | Entry point. `./genconfig.sh [flavor]`, defaults to `generic`. |
 | `kconf-run.sh` | Runs any Kconfiglib script/tool against a kernel tree (what `make scriptconfig` would set up). |
 | `misc/zabbly-config` | The reference config the generic flavor aims to reproduce. Neither input nor output — it is how the result is judged. |
@@ -29,13 +29,30 @@ A flavor is a self-contained directory — `flavors/<name>/config.py` plus
 
 ```
 flavors/
-└── generic/
+├── generic/
+│   ├── config.py
+│   └── config_slices/
+│       ├── block_devices.config
+│       ├── containers.config
+│       └── …
+└── incus-os/
     ├── config.py
     └── config_slices/
-        ├── block_devices.config
-        ├── containers.config
         └── …
 ```
+
+### The flavors
+
+| Flavor | Purpose |
+| --- | --- |
+| `generic` | Full-featured distro kernel. Reproduces `misc/zabbly-config` exactly; a diff of zero is the goal, and any line in it is a defect. |
+| `incus-os` | Hypervisor/container host kernel for x86_64 servers. **Currently a verbatim copy of `generic`** — the starting point, so that divergence shows up commit by commit rather than as one unreviewable drop. |
+
+Both are compared against `misc/zabbly-config`, because it is the only reference
+in the tree and a diff is more informative than no diff. Read them differently
+though: for `generic` a diff of zero is success, while for a flavor that
+deliberately strips things the diff is the list of what it dropped, and a large
+one means it is working.
 
 ## Prerequisites
 
@@ -92,30 +109,37 @@ Run from the repository root:
 
 ```sh
 ./genconfig.sh              # same as ./genconfig.sh generic
+./genconfig.sh incus-os     # any flavor under flavors/
 ./genconfig.sh --help       # flags and defaults
 ```
 
-This writes `generated_config` and, for the generic flavor, compares it against
-the reference `misc/zabbly-config`, leaving the analysis in `output/`:
+This writes `generated_config` (or `generated_config-<flavor>` for anything but
+`generic`) and compares it against `misc/zabbly-config`, leaving the analysis in
+`output/<flavor>/` — per flavor, so building one does not wipe out the analysis
+of another:
 
 | File | Contents |
 | --- | --- |
-| `output/diff` | Side-by-side diff against the reference config. |
-| `output/missing_from_ours.txt` | Symbols the reference enables that we don't. |
-| `output/changed_from_ours.txt` | Symbols where the two configs disagree. |
-| `output/capped_symbols.txt` | Assignments the walker attempted that were silently capped by an unmet dependency. |
+| `output/<flavor>/diff` | Side-by-side diff against the reference config. |
+| `output/<flavor>/missing_from_ours.txt` | Symbols the reference enables that we don't. |
+| `output/<flavor>/changed_from_ours.txt` | Symbols where the two configs disagree. |
+| `output/<flavor>/capped_symbols.txt` | Assignments the walker attempted that were silently capped by an unmet dependency. |
 
 Most of `capped_symbols.txt` is expected noise — drivers for hardware that
 cannot exist on x86_64 get "capped" quite correctly. `cross_reference.py` (run
 automatically by `genconfig.sh`) intersects it with the missing-vs-reference
 list to surface only the genuine gaps.
 
-Other flavors skip the comparison entirely: the reference is zabbly's config, so
-byte-parity says nothing about a kernel that is deliberately different.
+To add a flavor, copy an existing one and start editing:
 
 ```sh
-./genconfig.sh server       # needs flavors/server/{config.py,config_slices/}
+cp -r flavors/generic flavors/server    # then trim flavors/server/
+./genconfig.sh server
 ```
+
+A flavor loads the `config_slices/` sitting next to it — `config.py` derives its
+own name from its directory, so a copy needs no edit to point at the right
+fragments.
 
 ## Normalization
 
@@ -140,14 +164,14 @@ win over `.env`. When it runs you additionally get:
 | File | Contents |
 | --- | --- |
 | `<config>-defconfig` | The minimal form of our config. |
-| `output/reference-config` | The reference put through the same toolchain. |
-| `output/reference-config-defconfig` | Its minimal form. |
-| `output/diff-defconfig` | Minimal-form diff — what the two configs *really* disagree about, with everything implied by dependencies and defaults stripped out. |
+| `output/<flavor>/reference-config` | The reference put through the same toolchain. |
+| `output/<flavor>/reference-config-defconfig` | Its minimal form. |
+| `output/<flavor>/diff-defconfig` | Minimal-form diff — what the two configs *really* disagree about, with everything implied by dependencies and defaults stripped out. |
 
 Both sides have to go through the same toolchain or the comparison measures the
 normalizer rather than the generator. The normalized reference is written to
-`output/`, never back over `misc/zabbly-config` — a run must not rewrite a
-tracked reference file.
+`output/<flavor>/`, never back over `misc/zabbly-config` — a run must not
+rewrite a tracked reference file.
 
 ## Other tools
 
@@ -179,10 +203,11 @@ non-zero only if the checker itself could not run.
 ## Continuous integration
 
 `.github/workflows/generate-config.yml` runs the whole thing on `ubuntu-latest`
-for every push and pull request: it installs the dependencies above, fetches and
-caches the kernel tree, generates the generic flavor, and publishes
-`generated_config` plus `output/` as build artifacts. The diff against
-`misc/zabbly-config` and the hardening report both land in the run's job summary.
+for every push and pull request, once per flavor as a matrix: it installs the
+dependencies above, fetches and caches the kernel tree, generates the config,
+and publishes it plus `output/<flavor>/` as build artifacts. The diff against
+`misc/zabbly-config` and the hardening report both land in the run's job
+summary.
 
 Neither is enforced. Note that the runner's compiler differs from the one
 `misc/zabbly-config` was built with, so `CC_VERSION_TEXT` and any

@@ -16,9 +16,18 @@ on:
         type: boolean
 
 jobs:
-  generic:
-    name: generic flavor
+  generate:
+    name: ${{ matrix.flavor }} flavor
     runs-on: ubuntu-latest
+
+    strategy:
+      # One flavor failing should not hide the others' results.
+      fail-fast: false
+      matrix:
+        flavor: [generic, incus-os]
+
+    env:
+      FLAVOR: ${{ matrix.flavor }}
 
     steps:
       - name: Check out
@@ -83,50 +92,70 @@ jobs:
               .env.example > .env
           cat .env
 
-      - name: Check each flavor's config_slices are disjoint
-        run: ./check_slices.py
+      - name: Check config_slices are disjoint
+        run: ./check_slices.py "$FLAVOR"
+
+      # genconfig.sh gives every flavor but generic a suffixed output name, so
+      # that they cannot clobber each other. Mirror that rule here.
+      - name: Resolve the generated config path
+        run: |
+          set -euo pipefail
+          if [ "$FLAVOR" = "generic" ]; then
+            echo "CONFIG_FILE=generated_config" >> "$GITHUB_ENV"
+          else
+            echo "CONFIG_FILE=generated_config-$FLAVOR" >> "$GITHUB_ENV"
+          fi
 
       # The flag is passed explicitly rather than left to .env.example, so CI
       # behaviour cannot change as a side effect of editing that template. The
       # runner does have the build dependencies, so normalization is a
       # workflow_dispatch option rather than something that cannot run here.
-      - name: Generate the generic config
+      - name: Generate the config
         run: |
           if [ "${{ inputs.normalize }}" = "true" ]; then
-            ./genconfig.sh generic --normalize
+            ./genconfig.sh "$FLAVOR" --normalize
           else
-            ./genconfig.sh generic --no-normalize
+            ./genconfig.sh "$FLAVOR" --no-normalize
           fi
 
       - name: Show diff against the reference config
         if: always()
         run: |
           set -euo pipefail
-          if [ ! -f output/diff ]; then
-            echo "output/diff was not produced -- the generation step must have failed."
+          if [ ! -f output/${FLAVOR}/diff ]; then
+            echo "output/${FLAVOR}/diff was not produced -- the generation step must have failed."
             exit 1
           fi
 
-          lines=$(wc -l < output/diff)
-          echo "::notice::output/diff is $lines line(s)"
+          lines=$(wc -l < output/${FLAVOR}/diff)
+          echo "::notice::output/${FLAVOR}/diff is $lines line(s)"
 
           {
-            echo "## Diff vs misc/zabbly-config ($lines lines)"
+            echo "## $FLAVOR: diff vs misc/zabbly-config ($lines lines)"
             echo
             echo 'Left column is misc/zabbly-config, right column is our generated config.'
             echo
-            echo 'Some divergence is expected here and not a regression: the'
-            echo 'reference config was built with a different compiler, so'
+            if [ "$FLAVOR" = "generic" ]; then
+              echo 'The generic flavor aims to reproduce the reference exactly, so'
+              echo 'every line here is something to explain.'
+            else
+              echo "The $FLAVOR flavor deliberately differs from a general-purpose"
+              echo 'distro kernel, so this diff is the list of what it drops or'
+              echo 'changes -- a large one is the point, not a defect.'
+            fi
+            echo
+            echo 'Either way, some divergence is environmental rather than ours:'
+            echo 'the reference config was built with a different compiler, so'
             echo '`CC_VERSION_TEXT` and any gcc-version-gated symbols will differ'
             echo 'from what this runner produces.'
             echo
             echo '```diff'
-            cat output/diff
+            cat output/${FLAVOR}/diff
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-          echo "----- output/diff -----"
-          cat output/diff
+          echo "----- output/${FLAVOR}/diff -----"
+          cat output/${FLAVOR}/diff
           echo "-----------------------"
 
       # Informational only. kernel-hardening-checker exits 0 whatever the
@@ -136,23 +165,23 @@ jobs:
       - name: Check config hardening
         run: |
           set -euo pipefail
-          ./check-config-hardening.sh | tee output/hardening.txt
+          ./check-config-hardening.sh "$CONFIG_FILE" | tee "output/$FLAVOR/hardening.txt"
 
-          echo "::notice::$(grep -F '[+] Check is finished:' output/hardening.txt \
+          echo "::notice::$(grep -F '[+] Check is finished:' output/${FLAVOR}/hardening.txt \
                             || echo 'hardening check finished')"
 
           {
-            echo "## Hardening check"
+            echo "## $FLAVOR: hardening check"
             echo
-            echo 'Reported, not enforced: the generic flavor targets parity with a'
-            echo 'general-purpose distro kernel, which is nowhere near a hardened'
-            echo 'one, so FAIL lines here are expected. This step fails only if'
+            echo 'Reported, not enforced: these flavors target general-purpose'
+            echo 'distro kernels, which are nowhere near hardened ones, so FAIL'
+            echo 'lines here are expected. This step fails only if'
             echo 'kernel-hardening-checker itself errors out.'
             echo
             echo '<details><summary>Full report</summary>'
             echo
             echo '```'
-            cat output/hardening.txt
+            cat output/${FLAVOR}/hardening.txt
             echo '```'
             echo
             echo '</details>'
@@ -162,8 +191,8 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: generic-config
+          name: ${{ matrix.flavor }}-config
           path: |
-            generated_config
-            output/
+            ${{ env.CONFIG_FILE }}
+            output/${{ matrix.flavor }}/
           if-no-files-found: warn
