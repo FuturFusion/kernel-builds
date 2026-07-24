@@ -586,17 +586,6 @@ enable_by_prefix("FB_")
 # framebuffers) rather than the staging-adjacent FB_TFT hobbyist-display
 # family -- explicit direct sets as a targeted follow-up.
 
-# --- Backlight and LCD panel class devices: two more real, entirely
-#     untouched umbrellas (drivers/video/backlight/Kconfig). Most of the
-#     BACKLIGHT_* residual (88PM860X, AAT2870, ADP5520, DA903X, LP8788,
-#     MAX8925, ...) is PMIC-companion chips -- same promptless-MFD wall
-#     as CHARGER/REGULATOR/IIO/SENSORS, so expect those specific ones to
-#     stay capped regardless.
-enable_umbrella("BACKLIGHT_CLASS_DEVICE", 2, label="BACKLIGHT_CLASS_DEVICE")
-enable_by_prefix("BACKLIGHT_")
-enable_umbrella("LCD_CLASS_DEVICE", 1, label="LCD_CLASS_DEVICE")
-enable_by_prefix("LCD_")
-
 # ============================================================================
 # Batch found via a broad "never attempted at all" scan across the WHOLE
 # residual (not just a specific prefix someone asked about) -- 1253 of
@@ -749,8 +738,6 @@ enable_by_prefix("USB4_")                              # USB4_NET lives under dr
 #
 # Where the sub-options are prefix siblings (`depends on X`) rather than nested
 # menu children, the umbrella walk can't reach them and a prefix sweep follows.
-enable_umbrella("MOST", 1, label="MOST")               # MOST automotive bus core (drivers/most)
-enable_umbrella("MOST_COMPONENTS", 1, label="MOST_COMPONENTS")  # ...and its component drivers, which live in a separate menuconfig under drivers/staging/most: CDEV/NET/SND/VIDEO/DIM2/USB_HDM
 enable_umbrella("EVM", 2, label="EVM")                 # Extended Verification Module (integrity xattr protection)
 enable_by_prefix("EVM_")                               # ATTR_FSUUID/ADD_XATTRS/EXTRA_SMACK_XATTRS are `depends on EVM` siblings
 enable_exact(("HARDLOCKUP_DETECTOR", 2))               # NMI hard-lockup detector; the _PERF/_COUNTS_HRTIMER/_ARCH/_BUDDY sub-symbols are promptless and resolve themselves
@@ -842,15 +829,6 @@ enable_umbrella("NET_DSA", 1, label="NET_DSA")
 #     NET_CLS_ACT specifically gates action visibility and needs setting
 #     explicitly (it's a bool with no children of its own).
 enable_umbrella("NET_SCHED", 2, label="NET_SCHED")
-
-# --- net/batman-adv/Kconfig: mesh networking protocol
-enable_umbrella("BATMAN_ADV", 1, label="BATMAN_ADV")
-
-# --- drivers/net/can/Kconfig + net/can/Kconfig
-enable_umbrella("CAN", 1, label="CAN")
-
-# --- drivers/gnss/Kconfig
-enable_umbrella("GNSS", 1, label="GNSS")
 
 # --- drivers/ata/pata_parport/Kconfig, nested under ATA -- should already
 #     be reachable via the ATA walk added last round, but PATA_PARPORT
@@ -1011,11 +989,6 @@ for name in ("SND_SOC_INTEL_SST_TOPLEVEL", "SND_SOC_SOF_INTEL_TOPLEVEL", "SND_SO
     if name in kconf.syms:
         kconf.syms[name].set_value(2)  # y
 
-# SoundWire: a separate audio-codec interconnect bus subsystem, not nested
-# under SOUND at all -- explains the SND_SOC_*_SDW cluster in the residual.
-# Confirmed real (not noise) via zabbly-config having SOUNDWIRE=m.
-enable_umbrella("SOUNDWIRE", 1, label="SOUNDWIRE")
-
 # Several remaining SND_SOC_INTEL_*_MACH drivers (Bay Trail/Cherry Trail
 # era) additionally depend on this Intel platform I2C/SPI/UART controller
 # support. Confirmed real via zabbly-config having X86_INTEL_LPSS=y.
@@ -1052,11 +1025,6 @@ enable_umbrella("USB_NET_DRIVERS", 1, label="USB_NET_DRIVERS")
 # separated out so the type isn't hidden in the list above.
 for name in ("REGULATOR", "X86_PLATFORM_DEVICES"):
     enable_umbrella(name, 2)   # y -- these are bool umbrellas
-
-# XEN: makes no sense on a KVM-only host. Included ONLY for byte-parity
-# against zabbly-config, which is a general-purpose desktop/server kernel
-# that supports running as a Xen guest/host too.
-enable_umbrella("XEN", 2, label="XEN")
 
 # COMEDI: lives in drivers/staging. Reverses the staging-exclusion stance
 # from earlier in this project -- included ONLY for byte-parity, never in
@@ -1107,40 +1075,5 @@ enable_umbrella("VIRTIO_VFIO_PCI", 1, label="VIRTIO_VFIO_PCI")
 enable_umbrella("STM", 1, label="STM")
 
 #kconf.load_config("kernel/configs/kvm_guest.config", replace=False)
-
-# VALIDATION-ONLY override: netfilter.config deliberately disables
-# NETFILTER_XTABLES_LEGACY (dropping legacy iptables/ip6tables tooling
-# while keeping NETFILTER_XTABLES + NFT_COMPAT for translated-rule
-# compatibility) -- that's the real production policy decision from
-# earlier in this project, and it's correct for production. But since this
-# script's job is byte-parity with zabbly-config specifically, re-enable
-# it here, AFTER the fragment load, so it isn't immediately overridden
-# back to n. IP_NF_IPTABLES_LEGACY / IP6_NF_IPTABLES_LEGACY default to m
-# conditionally on this, so flipping the one switch should take both
-# with it -- no need to set them individually.
-if "NETFILTER_XTABLES_LEGACY" in kconf.syms:
-    kconf.syms["NETFILTER_XTABLES_LEGACY"].set_value(2)  # y
-
-# Legacy/foreign partition table format support (block/partitions/Kconfig).
-# Structurally different from everything else in this file: PARTITION_ADVANCED
-# doesn't wrap its children in an "if PARTITION_ADVANCED ... endif" block --
-# each format instead uses `bool "..." if PARTITION_ADVANCED` (a conditional
-# PROMPT on the individual symbol), so PARTITION_ADVANCED has no node.list
-# children at all. Neither the subtree walker nor the general bool-gate rule
-# could ever reach these regardless of the deny-list -- needs direct
-# handling. Also a small, fixed, well-bounded list (not a vendor zoo), so an
-# explicit list is the right tool here, not more walker machinery.
-# Mirrors zabbly-config's specific choices exactly -- it does NOT enable
-# everything either (ACORN_PARTITION and OF_PARTITION are off there too).
-if "PARTITION_ADVANCED" in kconf.syms:
-    kconf.syms["PARTITION_ADVANCED"].set_value(2)  # y
-    for name in (
-        "AIX_PARTITION", "AMIGA_PARTITION", "ATARI_PARTITION", "BSD_DISKLABEL",
-        "KARMA_PARTITION", "LDM_PARTITION", "MAC_PARTITION", "MINIX_SUBPARTITION",
-        "OSF_PARTITION", "SGI_PARTITION", "SOLARIS_X86_PARTITION", "SUN_PARTITION",
-        "SYSV68_PARTITION", "ULTRIX_PARTITION", "UNIXWARE_DISKLABEL",
-    ):
-        if name in kconf.syms:
-            kconf.syms[name].set_value(2)  # y
 
 finish()
