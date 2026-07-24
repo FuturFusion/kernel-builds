@@ -887,8 +887,13 @@ if "MEDIA_SUPPORT_FILTER" in kconf.syms:
     # keeps the filter ON and enables each category individually, rather than
     # disabling the filter entirely. Both approaches unlock the same media
     # drivers practically, but only this one is byte-identical to zabbly.
-    kconf.syms["MEDIA_RADIO_SUPPORT"].set_value(2)
     kconf.syms["MEDIA_SDR_SUPPORT"].set_value(2)
+    kconf.syms["MEDIA_DIGITAL_TV_SUPPORT"].set_value(0)
+    kconf.syms["MEDIA_ANALOG_TV_SUPPORT"].set_value(0)
+    kconf.syms["MEDIA_CAMERA_SUPPORT"].set_value(0)
+    kconf.syms["MEDIA_RADIO_SUPPORT"].set_value(0)
+    kconf.syms["MEDIA_TEST_SUPPORT"].set_value(0)
+#    kconf.syms["MEDIA_SUBDRV_AUTOSELECT"].set_value(0)
 
 # Confirmed via cross-referencing capped_symbols.txt against the real
 # missing-vs-zabbly diff: zabbly-config has CONFIG_OF=y, which is why a
