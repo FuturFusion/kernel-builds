@@ -48,18 +48,22 @@ flavors/
 | `generic` | Full-featured distro kernel. Reproduces `misc/<series>/zabbly-config` exactly; a diff of zero is the goal, and any line in it is a defect. |
 | `incus-os` | Hypervisor/container host kernel for x86_64 servers. **Currently a verbatim copy of `generic`** — the starting point, so that divergence shows up commit by commit rather than as one unreviewable drop. |
 
-Both are compared against `misc/<series>/zabbly-config`, where `<series>` is
+Both are judged against `misc/<series>/zabbly-config`, where `<series>` is
 the kernel's own major.minor series (`6.19`, `7.0`, `7.1`, …), detected
-automatically from `KERNEL_TREE_PATH` — there's no per-run flag for it. It's
-the only reference available for that series, and a diff is more informative
-than no diff. Read them differently though: for `generic` a diff of zero is
+automatically from `KERNEL_TREE_PATH` — there's no per-run flag for which
+series. There's no flavor-specific reference, either: it's the only one
+available for that series, and a diff is more informative than no diff.
+Read it differently per flavor though: for `generic` a diff of zero is
 success, while for a flavor that deliberately strips things the diff is the
 list of what it dropped, and a large one means it is working.
 
-If `KERNEL_TREE_PATH` points at a kernel whose series has no matching
-`misc/<series>/zabbly-config`, `genconfig.sh` fails fast and lists the series
-it does have references for, rather than silently comparing against the
-wrong one.
+That comparison is opt-in, via `--validate` (see [Usage](#usage)) — a
+reference config is only needed to answer "does this match zabbly-config",
+not to generate a config in the first place, so plain generation works even
+for a kernel series with no `misc/<series>/` yet. `--validate` fails fast
+and lists the series it does have references for if the current
+`KERNEL_TREE_PATH` kernel's series has no match, rather than silently
+comparing against the wrong one.
 
 ## Prerequisites
 
@@ -109,22 +113,28 @@ $EDITOR .env
 | `KERNEL_TREE_PATH` | Your kernel source checkout. |
 | `KERNEL_TREE_BUILD_PATH` | Scratch `O=` build directory, used only by normalization. |
 | `NORMALIZE_CONFIG` | `true`/`false` (default `false`) — see [Normalization](#normalization). |
+| `VALIDATE_CONFIG` | `true`/`false` (default `false`) — whether to compare the result against `misc/<series>/zabbly-config`. Off by default: generating a config doesn't need a reference at all, only this comparison does. |
 
 ## Usage
 
 Run from the repository root:
 
 ```sh
-./genconfig.sh              # same as ./genconfig.sh generic
-./genconfig.sh incus-os     # any flavor under flavors/
-./genconfig.sh --help       # flags and defaults
+./genconfig.sh                    # same as ./genconfig.sh generic
+./genconfig.sh incus-os           # any flavor under flavors/
+./genconfig.sh generic --validate # also compare against the reference config
+./genconfig.sh --help             # flags and defaults
 ```
 
-This writes `generated_config` (or `generated_config-<flavor>` for anything but
-`generic`) and compares it against the `misc/<series>/zabbly-config` matching
+By default this just writes `generated_config` (or `generated_config-<flavor>`
+for anything but `generic`) and stops — no reference config is required or
+consulted. Pass `--validate` (or set `VALIDATE_CONFIG=true` in `.env`) to also
+compare it against the `misc/<series>/zabbly-config` matching
 `KERNEL_TREE_PATH`'s kernel series, leaving the analysis in
 `output/<flavor>/` — per flavor, so building one does not wipe out the analysis
-of another:
+of another. Without `--validate`, `output/<flavor>/` still gets
+`capped_symbols.txt` (a diagnostic of the generator's own sweep, independent
+of any reference), but none of the reference-comparison files below:
 
 | File | Contents |
 | --- | --- |
@@ -167,11 +177,20 @@ verification step.
 ```
 
 Set `NORMALIZE_CONFIG=true` in `.env` to make it the default; the flags always
-win over `.env`. When it runs you additionally get:
+win over `.env`. Normalizing our own config happens whenever `--normalize` is
+on, `--validate` or not — a normalized config is what a real build (e.g. a
+`.deb`) needs regardless of whether you're also checking it against a
+reference:
 
 | File | Contents |
 | --- | --- |
 | `<config>-defconfig` | The minimal form of our config. |
+
+Combine `--normalize` with `--validate` to also normalize the reference side
+and get the minimal-form comparison:
+
+| File | Contents |
+| --- | --- |
 | `output/<flavor>/reference-config` | The reference put through the same toolchain. |
 | `output/<flavor>/reference-config-defconfig` | Its minimal form. |
 | `output/<flavor>/diff-defconfig` | Minimal-form diff — what the two configs *really* disagree about, with everything implied by dependencies and defaults stripped out. |
@@ -225,6 +244,30 @@ Neither is enforced. Note that the runner's compiler differs from the one
 each `misc/<series>/zabbly-config` was built with, so `CC_VERSION_TEXT` and any
 gcc-version-gated symbols will show up in the CI diff even when the local diff
 is clean.
+
+### Building a `.deb`
+
+`.github/workflows/build-deb.yml` is a separate, manually-triggered workflow
+(`workflow_dispatch` only — it never runs on push or pull request) that
+packages an actual kernel with `make bindeb-pkg`. It prompts for a precise
+kernel version (e.g. `6.19.4`, not just a series) and a flavor, and runs as a
+matrix over target distros: `debian-12`, `debian-13`, `ubuntu-24.04`.
+
+Each target builds inside its own container (via `podman`, preinstalled on
+the GitHub-hosted runner image — nothing to set up) rather than on the
+runner's own Ubuntu directly. That's not just packaging convenience: this
+repo's own tooling probes the toolchain at generation time
+(`CC_VERSION_TEXT`, `PAHOLE_VERSION`), so config generation has to happen
+inside the same container as the build, or the config could end up gated on
+a different compiler/pahole than the one actually building the kernel.
+Config generation, `make bindeb-pkg`, and package collection all run as one
+script inside each container; only the checkout, the cached kernel source
+tree, and a directory for the finished `.deb`s are bind-mounted in.
+
+It's kept separate and manual on purpose: packaging a real kernel — three
+times over, once per target — is far heavier than generating a config, and
+disk space in particular is tight on GitHub-hosted runners once container
+storage is added on top of the build's own object files and debug info.
 
 ## Writing or editing a flavor
 

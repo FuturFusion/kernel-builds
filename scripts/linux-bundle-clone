@@ -1,0 +1,66 @@
+#!/bin/sh
+# linux-bundle-clone
+# ------------------
+# Vendored from https://git.kernel.org/pub/scm/linux/kernel/git/mricon/korg-helpers.git
+# (linux-bundle-clone), with one local change: CDNBUNDLE now honors an
+# existing environment value (${CDNBUNDLE:-default}) instead of always
+# being the hardcoded mainline bundle, so callers can point it at the
+# stable or linux-next bundle without editing the script in place.
+#
+# Use this script to clone a Linux repository using a CDN-hosted bundle.
+# This is the recommended way to clone Linux in a CI environment where
+# the full repository needs to be cloned every time.
+[ "${REMOTE:=$1}" ] || {
+    echo "Please specify the remote to clone"
+    echo "Example: ${0} https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git linux master"
+    exit 1
+}
+
+[ "${TARGET:=$2}" ] || {
+    echo "Please specify the target directory"
+    echo "Example: ${0} https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git linux master"
+    exit 1
+}
+
+CHECKOUT=${3:-master}
+
+# You can also use "http" if you are behind a caching proxy and want to
+# benefit from a locally stored copy. Initial time to first byte may be
+# long if the CDN frontend doesn't have the copy of the bundle yet, but
+# repeat requests will use the cached CDN copy.
+#
+# NOTICE: Pick the tree that's likely to have most of the objects you want
+#         We have mainline, stable, and linux-next bundles for you to choose
+#CDNBUNDLE="https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git/clone.bundle"
+#CDNBUNDLE="https://git.kernel.org/pub/scm/linux/kernel/git/next/linux-next.git/clone.bundle"
+CDNBUNDLE="${CDNBUNDLE:-https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/clone.bundle}"
+
+# We'll put the bundle into a safe temp location, but WARNING -- it's a
+# 1Gb+ file, so if you have limited space in /tmp, you should consider
+# changing the path here. See "man mktemp".
+BUNDLELOCAL=$(mktemp /tmp/linux-bundle.XXXXXXXXXX)
+
+echo "Getting the bundle file"
+curl -L "${CDNBUNDLE}" -o "${BUNDLELOCAL}" || {
+    echo "Getting the clone bundle failed."
+    # clean up to not litter huge files around
+    rm -f "${BUNDLELOCAL}"
+    exit 1
+}
+
+echo "Cloning from the bundle file"
+git clone "${BUNDLELOCAL}" "${TARGET}" || {
+    echo "Cloning from bundle failed."
+    echo "The bundle is in ${BUNDLELOCAL}"
+    exit 1
+}
+
+# We're done with the bundle now
+rm -f "${BUNDLELOCAL}"
+
+cd "${TARGET}"
+echo "Fetching latest objects"
+git remote set-url origin "${REMOTE}"
+git remote update origin
+
+git checkout "${CHECKOUT}"

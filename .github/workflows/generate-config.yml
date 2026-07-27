@@ -147,9 +147,9 @@ jobs:
       - name: Generate the config
         run: |
           if [ "${{ inputs.normalize }}" = "true" ] || [ -z "${{ inputs.normalize }}" ]; then
-            ./genconfig.sh "$FLAVOR" --normalize
+            ./genconfig.sh "$FLAVOR" --normalize --validate
           else
-            ./genconfig.sh "$FLAVOR" --no-normalize
+            ./genconfig.sh "$FLAVOR" --no-normalize --validate
           fi
 
       - name: Show diff against the reference config
