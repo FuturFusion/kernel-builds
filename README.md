@@ -21,7 +21,7 @@ with.
 | `flavors/<name>/config_slices/*.config` | The data half of that flavor: per-symbol policy no structural sweep can express. |
 | `genconfig.sh` | Entry point. `./genconfig.sh [flavor]`, defaults to `generic`. |
 | `kconf-run.sh` | Runs any Kconfiglib script/tool against a kernel tree (what `make scriptconfig` would set up). |
-| `misc/zabbly-config` | The reference config the generic flavor aims to reproduce. Neither input nor output — it is how the result is judged. |
+| `misc/<series>/zabbly-config` | The reference config the generic flavor aims to reproduce, one per kernel series (`misc/6.19/`, `misc/7.0/`, `misc/7.1/`, …). Neither input nor output — it is how the result is judged. |
 
 A flavor is a self-contained directory — `flavors/<name>/config.py` plus
 `flavors/<name>/config_slices/`. Adding one requires no changes to
@@ -45,14 +45,21 @@ flavors/
 
 | Flavor | Purpose |
 | --- | --- |
-| `generic` | Full-featured distro kernel. Reproduces `misc/zabbly-config` exactly; a diff of zero is the goal, and any line in it is a defect. |
+| `generic` | Full-featured distro kernel. Reproduces `misc/<series>/zabbly-config` exactly; a diff of zero is the goal, and any line in it is a defect. |
 | `incus-os` | Hypervisor/container host kernel for x86_64 servers. **Currently a verbatim copy of `generic`** — the starting point, so that divergence shows up commit by commit rather than as one unreviewable drop. |
 
-Both are compared against `misc/zabbly-config`, because it is the only reference
-in the tree and a diff is more informative than no diff. Read them differently
-though: for `generic` a diff of zero is success, while for a flavor that
-deliberately strips things the diff is the list of what it dropped, and a large
-one means it is working.
+Both are compared against `misc/<series>/zabbly-config`, where `<series>` is
+the kernel's own major.minor series (`6.19`, `7.0`, `7.1`, …), detected
+automatically from `KERNEL_TREE_PATH` — there's no per-run flag for it. It's
+the only reference available for that series, and a diff is more informative
+than no diff. Read them differently though: for `generic` a diff of zero is
+success, while for a flavor that deliberately strips things the diff is the
+list of what it dropped, and a large one means it is working.
+
+If `KERNEL_TREE_PATH` points at a kernel whose series has no matching
+`misc/<series>/zabbly-config`, `genconfig.sh` fails fast and lists the series
+it does have references for, rather than silently comparing against the
+wrong one.
 
 ## Prerequisites
 
@@ -114,7 +121,8 @@ Run from the repository root:
 ```
 
 This writes `generated_config` (or `generated_config-<flavor>` for anything but
-`generic`) and compares it against `misc/zabbly-config`, leaving the analysis in
+`generic`) and compares it against the `misc/<series>/zabbly-config` matching
+`KERNEL_TREE_PATH`'s kernel series, leaving the analysis in
 `output/<flavor>/` — per flavor, so building one does not wipe out the analysis
 of another:
 
@@ -170,8 +178,8 @@ win over `.env`. When it runs you additionally get:
 
 Both sides have to go through the same toolchain or the comparison measures the
 normalizer rather than the generator. The normalized reference is written to
-`output/<flavor>/`, never back over `misc/zabbly-config` — a run must not
-rewrite a tracked reference file.
+`output/<flavor>/`, never back over `misc/<series>/zabbly-config` — a run must
+not rewrite a tracked reference file.
 
 ## Other tools
 
@@ -203,14 +211,18 @@ non-zero only if the checker itself could not run.
 ## Continuous integration
 
 `.github/workflows/generate-config.yml` runs the whole thing on `ubuntu-latest`
-for every push and pull request, once per flavor as a matrix: it installs the
-dependencies above, fetches and caches the kernel tree, generates the config,
-and publishes it plus `output/<flavor>/` as build artifacts. The diff against
-`misc/zabbly-config` and the hardening report both land in the run's job
-summary.
+for every push and pull request, as a matrix of every flavor **times** every
+kernel series that has a `misc/<series>/zabbly-config` (the series list is
+discovered from the `misc/` directory at run time, so adding a new
+`misc/<series>/` is enough to add it to CI — no workflow edit needed). For
+each `(flavor, series)` pair it installs the dependencies above, fetches and
+caches the matching kernel source tree, generates the config, and publishes it
+plus `output/<flavor>/` as build artifacts named `<flavor>-<series>-config`.
+The diff against that series' `misc/<series>/zabbly-config` and the hardening
+report both land in the run's job summary.
 
 Neither is enforced. Note that the runner's compiler differs from the one
-`misc/zabbly-config` was built with, so `CC_VERSION_TEXT` and any
+each `misc/<series>/zabbly-config` was built with, so `CC_VERSION_TEXT` and any
 gcc-version-gated symbols will show up in the CI diff even when the local diff
 is clean.
 

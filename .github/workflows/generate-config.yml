@@ -5,10 +5,6 @@ on:
   pull_request:
   workflow_dispatch:
     inputs:
-      kernel_version:
-        description: "Kernel version to configure against (default: read from misc/zabbly-config)"
-        required: false
-        type: string
       normalize:
         description: "Also normalize through the real Kconfig (make olddefconfig + savedefconfig)"
         required: false
@@ -16,18 +12,51 @@ on:
         type: boolean
 
 jobs:
+  discover-series:
+    name: Discover kernel series
+    runs-on: ubuntu-latest
+    outputs:
+      series: ${{ steps.list.outputs.series }}
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      # Every kernel series we test against is just a directory under misc/
+      # holding its own zabbly-config -- misc/6.19/, misc/7.0/, misc/7.1/, ...
+      # Discovering them here (rather than hardcoding a list in the matrix)
+      # means a new misc/<series>/ is enough to add a series to CI; nothing
+      # in this workflow needs editing.
+      - name: List series with a reference config
+        id: list
+        run: |
+          set -euo pipefail
+          series=$(for d in misc/*/; do
+            s="$(basename "$d")"
+            [ -f "misc/${s}/zabbly-config" ] && echo "$s"
+          done | sort -V | jq -R -s -c 'split("\n")[:-1]')
+          if [ "$series" = "[]" ]; then
+            echo "error: no misc/<series>/zabbly-config found under misc/" >&2
+            exit 1
+          fi
+          echo "Series found: $series"
+          echo "series=$series" >> "$GITHUB_OUTPUT"
+
   generate:
-    name: ${{ matrix.flavor }} flavor
+    name: ${{ matrix.flavor }} / ${{ matrix.series }}
+    needs: discover-series
     runs-on: ubuntu-latest
 
     strategy:
-      # One flavor failing should not hide the others' results.
+      # One (flavor, series) combination failing should not hide the others.
       fail-fast: false
       matrix:
         flavor: [generic, incus-os]
+        series: ${{ fromJson(needs.discover-series.outputs.series) }}
 
     env:
       FLAVOR: ${{ matrix.flavor }}
+      SERIES: ${{ matrix.series }}
 
     steps:
       - name: Check out
@@ -41,25 +70,24 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             build-essential flex bison bc libelf-dev libssl-dev dwarves python3
 
-      # misc/zabbly-config states the kernel it was built for in its header
-      # ("# Linux/x86 <version> Kernel Configuration"), so derive the version
-      # from it rather than hardcoding one that would silently drift.
+      # misc/<series>/zabbly-config states the exact kernel it was built for
+      # in its header ("# Linux/x86 <version> Kernel Configuration"), so the
+      # tarball to download comes from there rather than being guessed from
+      # the series name alone -- misc/6.19/ doesn't by itself say whether
+      # that means 6.19.0 or 6.19.4.
       - name: Determine kernel version
         id: kver
         run: |
           set -euo pipefail
-          version="${{ inputs.kernel_version }}"
+          version="$(sed -n 's|^# Linux/x86 \([0-9][0-9.]*\) Kernel Configuration$|\1|p' \
+                     "misc/${SERIES}/zabbly-config" | head -1)"
           if [ -z "$version" ]; then
-            version="$(sed -n 's|^# Linux/x86 \([0-9][0-9.]*\) Kernel Configuration$|\1|p' \
-                       misc/zabbly-config | head -1)"
-          fi
-          if [ -z "$version" ]; then
-            echo "error: could not determine the kernel version from misc/zabbly-config" >&2
+            echo "error: could not determine the kernel version from misc/${SERIES}/zabbly-config" >&2
             exit 1
           fi
-          echo "Configuring against Linux $version"
-          echo "version=$version"        >> "$GITHUB_OUTPUT"
-          echo "major=${version%%.*}"    >> "$GITHUB_OUTPUT"
+          echo "Configuring $SERIES against Linux $version"
+          echo "version=$version"     >> "$GITHUB_OUTPUT"
+          echo "major=${version%%.*}" >> "$GITHUB_OUTPUT"
 
       # Cache the extracted source tree: it is a few hundred MB of pure
       # download+unpack that never changes for a given released version, so the
@@ -83,7 +111,9 @@ jobs:
           test -f ~/kernel/linux-"$v"/Makefile
 
       # Same step a human does per the README: copy the template, point it at
-      # this machine's paths.
+      # this machine's paths. Note there's no REFERENCE_CONFIG to set here --
+      # genconfig.sh works that out itself from KERNEL_TREE_PATH's own
+      # reported version, same as a local run gets.
       - name: Create .env
         run: |
           set -euo pipefail
@@ -110,6 +140,10 @@ jobs:
       # behaviour cannot change as a side effect of editing that template. The
       # runner does have the build dependencies, so normalization is a
       # workflow_dispatch option rather than something that cannot run here.
+      # Which misc/<series>/zabbly-config gets compared against is no longer
+      # this workflow's concern at all -- genconfig.sh derives it from the
+      # kernel tree we just downloaded, and the "Determine kernel version"
+      # step above guarantees that tree matches $SERIES.
       - name: Generate the config
         run: |
           if [ "${{ inputs.normalize }}" = "true" ] || [ -z "${{ inputs.normalize }}" ]; then
@@ -128,12 +162,12 @@ jobs:
           fi
 
           lines=$(wc -l < output/${FLAVOR}/diff)
-          echo "::notice::output/${FLAVOR}/diff is $lines line(s)"
+          echo "::notice::output/${FLAVOR}/diff ($SERIES) is $lines line(s)"
 
           {
-            echo "## $FLAVOR: diff vs misc/zabbly-config ($lines lines)"
+            echo "## $FLAVOR / $SERIES: diff vs misc/$SERIES/zabbly-config ($lines lines)"
             echo
-            echo 'Left column is misc/zabbly-config, right column is our generated config.'
+            echo 'Left column is the reference config, right column is our generated config.'
             echo
             if [ "$FLAVOR" = "generic" ]; then
               echo 'The generic flavor aims to reproduce the reference exactly, so'
@@ -171,7 +205,7 @@ jobs:
                             || echo 'hardening check finished')"
 
           {
-            echo "## $FLAVOR: hardening check"
+            echo "## $FLAVOR / $SERIES: hardening check"
             echo
             echo 'Reported, not enforced: these flavors target general-purpose'
             echo 'distro kernels, which are nowhere near hardened ones, so FAIL'
@@ -191,7 +225,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.flavor }}-config
+          name: ${{ matrix.flavor }}-${{ matrix.series }}-config
           path: |
             ${{ env.CONFIG_FILE }}
             output/${{ matrix.flavor }}/
