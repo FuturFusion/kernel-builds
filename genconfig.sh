@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Usage: ./genconfig.sh [flavor] [--normalize|--no-normalize]
+# Usage: ./genconfig.sh [flavor] [--normalize|--no-normalize] [--validate|--no-validate]
 #
 # A flavor is a directory: flavors/<flavor>/config.py (the policy) plus
 # flavors/<flavor>/config_slices/ (the data). genconfig.py itself is
@@ -12,21 +12,40 @@
 # kernel build environment -- flex, bison, bc, libelf, libssl -- which plain
 # config generation does not. Set NORMALIZE_CONFIG=true in .env to turn it on
 # permanently; the flags override .env for a single run.
+#
+# Validation compares the generated config against the misc/<series>/
+# zabbly-config matching the kernel tree's own version, and is what needs
+# that reference to exist at all. It is off by default: generating a config
+# is a legitimate thing to want on its own (e.g. to build a .deb from it),
+# and a reference is only needed for the "does this match zabbly-config"
+# question, not for generation itself. Set VALIDATE_CONFIG=true in .env to
+# turn it on permanently; the flags override .env for a single run.
 
 usage() {
     cat <<EOF
-Usage: $(basename "$0") [flavor] [--normalize|--no-normalize]
+Usage: $(basename "$0") [flavor] [--normalize|--no-normalize] [--validate|--no-validate]
 
   flavor            Which kernel to build: flavors/<flavor>/config.py plus
                     flavors/<flavor>/config_slices/. Default: generic.
   --normalize       Run the result through the kernel's real Kconfig
                     (make olddefconfig + savedefconfig) afterwards.
   --no-normalize    Skip that, even if .env asks for it.
+  --validate        Compare the result against the misc/<series>/zabbly-config
+                    matching the kernel tree's version. Requires that
+                    reference to exist -- fails if it doesn't.
+  --no-validate     Skip that, even if .env asks for it. Generation doesn't
+                    need a reference config at all; only this comparison does.
 
 Normalization is off by default because it needs a working kernel build
 environment (flex, bison, bc, libelf, libssl) that plain config generation
-does not. Set NORMALIZE_CONFIG=true in .env to turn it on permanently; these
-flags override .env for a single run.
+does not. Set NORMALIZE_CONFIG=true in .env to turn it on permanently.
+
+Validation is off by default because a reference config is only needed to
+answer "does this match zabbly-config", not to generate a config in the first
+place -- e.g. building a .deb from the result needs no reference at all. Set
+VALIDATE_CONFIG=true in .env to turn it on permanently.
+
+Either flag pair given on the command line overrides .env for this run only.
 EOF
 }
 
@@ -36,10 +55,13 @@ SCRIPT_DIR="$(dirname "$(realpath "$0")")"
 
 FLAVOR=""
 NORMALIZE_OVERRIDE=""
+VALIDATE_OVERRIDE=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --normalize)    NORMALIZE_OVERRIDE=true ;;
         --no-normalize) NORMALIZE_OVERRIDE=false ;;
+        --validate)     VALIDATE_OVERRIDE=true ;;
+        --no-validate)  VALIDATE_OVERRIDE=false ;;
         -h|--help)      usage; exit 0 ;;
         -*)             echo "error: unknown option '$1'" >&2; usage >&2; exit 1 ;;
         *)
@@ -74,11 +96,19 @@ if [ "$FLAVOR" != "generic" ]; then
     GENERATED_CONFIG_PATH="${GENERATED_CONFIG_PATH}-${FLAVOR}"
 fi
 
-# Command-line flags beat .env, which beats the default (off).
+# Command-line flags beat .env, which beats the default (off), for both
+# independent toggles.
 NORMALIZE_CONFIG="${NORMALIZE_OVERRIDE:-${NORMALIZE_CONFIG:-false}}"
 case "$NORMALIZE_CONFIG" in
     true|false) ;;
     *) echo "error: NORMALIZE_CONFIG must be true or false, got '$NORMALIZE_CONFIG'" >&2
+       exit 1 ;;
+esac
+
+VALIDATE_CONFIG="${VALIDATE_OVERRIDE:-${VALIDATE_CONFIG:-false}}"
+case "$VALIDATE_CONFIG" in
+    true|false) ;;
+    *) echo "error: VALIDATE_CONFIG must be true or false, got '$VALIDATE_CONFIG'" >&2
        exit 1 ;;
 esac
 
@@ -88,25 +118,33 @@ echo "Using kernel tree: $KERNEL_TREE_PATH"
 [ ! -z "$KERNEL_TREE_BUILD_PATH" ]
 echo "Using kernel tree build path: $KERNEL_TREE_BUILD_PATH"
 
-# Every reference config lives under misc/<series>/zabbly-config, keyed by the
-# kernel's own major.minor series (misc/6.19/, misc/7.0/, misc/7.1/, ...) --
-# there's one reference per series, not one for the whole repo, so the series
-# has to come from the kernel tree we're actually building against rather
-# than being hardcoded. Strip an -rcN/-whatever suffix first, then take the
-# first two dot-separated components: "6.19.4" and "6.19-rc3" both key on
-# "6.19"; a tree that reports a bare two-component version ("7.1") is used
-# as-is.
+# The kernel tree's own version, used for the config header comment
+# regardless of validation, and additionally to pick a reference config when
+# validating. Strip an -rcN/-whatever suffix first, then take the first two
+# dot-separated components: "6.19.4" and "6.19-rc3" both key on "6.19"; a
+# tree that reports a bare two-component version ("7.1") is used as-is.
 KERNEL_VERSION="$(make -s -C "$KERNEL_TREE_PATH" kernelversion)"
 KERNEL_SERIES="$(echo "${KERNEL_VERSION%%-*}" | cut -d. -f1,2)"
-REFERENCE_CONFIG="${SCRIPT_DIR}/misc/${KERNEL_SERIES}/zabbly-config"
 
-if [ ! -f "$REFERENCE_CONFIG" ]; then
-    echo "error: no reference config for kernel series '$KERNEL_SERIES' (kernel tree at $KERNEL_TREE_PATH reports version '$KERNEL_VERSION')" >&2
-    echo "       expected to find it at: $REFERENCE_CONFIG" >&2
-    echo "       available series: $(ls "${SCRIPT_DIR}/misc" 2>/dev/null | tr '\n' ' ')" >&2
-    exit 1
+# Every reference config lives under misc/<series>/zabbly-config -- one per
+# kernel series, not one for the whole repo. Only look for it, and only
+# require it to exist, when actually validating: generating a config is a
+# legitimate thing to want with no reference in play at all (e.g. building a
+# .deb from the result), so a missing reference must not block that.
+REFERENCE_CONFIG=""
+if [ "$VALIDATE_CONFIG" = "true" ]; then
+    REFERENCE_CONFIG="${SCRIPT_DIR}/misc/${KERNEL_SERIES}/zabbly-config"
+    if [ ! -f "$REFERENCE_CONFIG" ]; then
+        echo "error: no reference config for kernel series '$KERNEL_SERIES' (kernel tree at $KERNEL_TREE_PATH reports version '$KERNEL_VERSION')" >&2
+        echo "       expected to find it at: $REFERENCE_CONFIG" >&2
+        echo "       available series: $(ls "${SCRIPT_DIR}/misc" 2>/dev/null | tr '\n' ' ')" >&2
+        echo "       or run without --validate to generate without comparing against a reference" >&2
+        exit 1
+    fi
+    echo "Kernel tree version: $KERNEL_VERSION (series $KERNEL_SERIES) -- validating against $REFERENCE_CONFIG"
+else
+    echo "Kernel tree version: $KERNEL_VERSION (series $KERNEL_SERIES) -- not validating against a reference (pass --validate to compare)"
 fi
-echo "Kernel tree version: $KERNEL_VERSION (series $KERNEL_SERIES) -- using reference $REFERENCE_CONFIG"
 
 # "$$PYTHONPATH" here used to expand to the shell PID followed by the literal
 # string "PYTHONPATH" -- harmless, but it never actually preserved an
@@ -123,7 +161,9 @@ export KCONFIG_CONFIG_HEADER="#
 # Analysis is written per flavor, so building one does not wipe out the
 # analysis of another. output/ is generated data and gitignored, so it does not
 # exist in a fresh clone -- create it rather than letting finish() fail on the
-# first run. genconfig.py reads this to place capped_symbols.txt.
+# first run. genconfig.py reads this to place capped_symbols.txt (written
+# unconditionally -- it's a diagnostic of the enable_subtree() walk itself,
+# not of the comparison against a reference).
 export GENCONFIG_OUTPUT_DIR="${SCRIPT_DIR}/output/${FLAVOR}"
 rm -rf "$GENCONFIG_OUTPUT_DIR"
 mkdir -p "$GENCONFIG_OUTPUT_DIR"
@@ -147,41 +187,55 @@ if [ "$NORMALIZE_CONFIG" = "true" ]; then
     mkdir -p "$KERNEL_TREE_BUILD_PATH"
 
     # Ours: rewritten in place. It is generated output, so there is nothing to
-    # lose, and every consumer below should see the normalized form.
+    # lose, and every consumer below should see the normalized form. This
+    # happens regardless of --validate -- a normalized config is what a real
+    # build (e.g. a .deb) needs, reference or no reference.
     cp "$GENERATED_CONFIG_PATH" "${KERNEL_TREE_BUILD_PATH}/.config"
     "${SCRIPT_DIR}/fix-config.sh"
     cp "${KERNEL_TREE_BUILD_PATH}/.config" "$GENERATED_CONFIG_PATH"
     cp "${KERNEL_TREE_BUILD_PATH}/defconfig" "${GENERATED_CONFIG_PATH}-defconfig"
 
-    # The reference has to go through the same toolchain or the comparison
-    # below is measuring the normalizer rather than the generator. But it is
-    # written under output/ rather than back over misc/<series>/zabbly-config: a
-    # run must not rewrite a tracked reference file. Doing exactly that in
-    # place is why a misc/<series>/zabbly-config.orig had to exist as a
-    # pristine copy to recover from, and a reference silently regenerated by
-    # the same toolchain as the thing it is checking would make a clean diff
-    # meaningless.
-    NORMALIZED_REFERENCE="${GENCONFIG_OUTPUT_DIR}/reference-config"
-    cp "$REFERENCE_CONFIG" "${KERNEL_TREE_BUILD_PATH}/.config"
-    "${SCRIPT_DIR}/fix-config.sh"
-    cp "${KERNEL_TREE_BUILD_PATH}/.config" "$NORMALIZED_REFERENCE"
-    cp "${KERNEL_TREE_BUILD_PATH}/defconfig" "${NORMALIZED_REFERENCE}-defconfig"
-    REFERENCE_CONFIG="$NORMALIZED_REFERENCE"
+    if [ "$VALIDATE_CONFIG" = "true" ]; then
+        # The reference has to go through the same toolchain or the comparison
+        # below is measuring the normalizer rather than the generator. But it is
+        # written under output/ rather than back over misc/<series>/zabbly-config: a
+        # run must not rewrite a tracked reference file. Doing exactly that in
+        # place is why a misc/<series>/zabbly-config.orig had to exist as a
+        # pristine copy to recover from, and a reference silently regenerated by
+        # the same toolchain as the thing it is checking would make a clean diff
+        # meaningless.
+        #
+        # Note this reuses KERNEL_TREE_BUILD_PATH/.config as scratch space,
+        # clobbering the normalized copy of OUR config that's currently sitting
+        # there -- fine here since we already copied it out to
+        # GENERATED_CONFIG_PATH above, but anything downstream that wants
+        # KERNEL_TREE_BUILD_PATH/.config to be ours (e.g. a build step chained
+        # after this script) needs to re-copy it from GENERATED_CONFIG_PATH first.
+        NORMALIZED_REFERENCE="${GENCONFIG_OUTPUT_DIR}/reference-config"
+        cp "$REFERENCE_CONFIG" "${KERNEL_TREE_BUILD_PATH}/.config"
+        "${SCRIPT_DIR}/fix-config.sh"
+        cp "${KERNEL_TREE_BUILD_PATH}/.config" "$NORMALIZED_REFERENCE"
+        cp "${KERNEL_TREE_BUILD_PATH}/defconfig" "${NORMALIZED_REFERENCE}-defconfig"
+        REFERENCE_CONFIG="$NORMALIZED_REFERENCE"
+    fi
 fi
 
-# now make necessary analysis. Every flavor built against this kernel series is
+# Everything from here down is the comparison against a reference, so none of
+# it runs without --validate. Every flavor built against this kernel series is
 # compared against that series' reference, since it is the only one available
 # for it and a diff is more informative than no diff -- but read it
 # differently per flavor. For generic, a diff of zero is the goal and any
 # line is a defect. For a flavor that deliberately strips things, the diff is
 # the list of what it dropped, and a big one means it is doing its job.
-python3 compare_configs.py "$GENERATED_CONFIG_PATH" "$REFERENCE_CONFIG" "${GENCONFIG_OUTPUT_DIR}/missing_from_ours.txt" "${GENCONFIG_OUTPUT_DIR}/changed_from_ours.txt"
-python3 cross_reference.py "${GENCONFIG_OUTPUT_DIR}/capped_symbols.txt" "${GENCONFIG_OUTPUT_DIR}/changed_from_ours.txt"
-diff -y --suppress-common-lines "$REFERENCE_CONFIG" "$GENERATED_CONFIG_PATH" > "${GENCONFIG_OUTPUT_DIR}/diff" || true
+if [ "$VALIDATE_CONFIG" = "true" ]; then
+    python3 compare_configs.py "$GENERATED_CONFIG_PATH" "$REFERENCE_CONFIG" "${GENCONFIG_OUTPUT_DIR}/missing_from_ours.txt" "${GENCONFIG_OUTPUT_DIR}/changed_from_ours.txt"
+    python3 cross_reference.py "${GENCONFIG_OUTPUT_DIR}/capped_symbols.txt" "${GENCONFIG_OUTPUT_DIR}/changed_from_ours.txt"
+    diff -y --suppress-common-lines "$REFERENCE_CONFIG" "$GENERATED_CONFIG_PATH" > "${GENCONFIG_OUTPUT_DIR}/diff" || true
 
-# savedefconfig strips everything implied by dependencies and defaults, so this
-# second diff is the minimal statement of what the two configs really disagree
-# about. Only exists when normalization ran.
-if [ "$NORMALIZE_CONFIG" = "true" ]; then
-    diff -y --suppress-common-lines "${REFERENCE_CONFIG}-defconfig" "${GENERATED_CONFIG_PATH}-defconfig" > "${GENCONFIG_OUTPUT_DIR}/diff-defconfig" || true
+    # savedefconfig strips everything implied by dependencies and defaults, so this
+    # second diff is the minimal statement of what the two configs really disagree
+    # about. Only exists when normalization ran.
+    if [ "$NORMALIZE_CONFIG" = "true" ]; then
+        diff -y --suppress-common-lines "${REFERENCE_CONFIG}-defconfig" "${GENERATED_CONFIG_PATH}-defconfig" > "${GENCONFIG_OUTPUT_DIR}/diff-defconfig" || true
+    fi
 fi
