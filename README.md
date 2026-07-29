@@ -35,7 +35,7 @@ flavors/
 │       ├── block_devices.config
 │       ├── containers.config
 │       └── …
-└── incus-os/
+└── server/
     ├── config.py
     └── config_slices/
         └── …
@@ -46,7 +46,7 @@ flavors/
 | Flavor | Purpose |
 | --- | --- |
 | `generic` | Full-featured distro kernel. Reproduces `misc/<series>/zabbly-config` exactly; a diff of zero is the goal, and any line in it is a defect. |
-| `incus-os` | Hypervisor/container host kernel for x86_64 servers. **Currently a verbatim copy of `generic`** — the starting point, so that divergence shows up commit by commit rather than as one unreviewable drop. |
+| `server` | Hypervisor/container host kernel for x86_64 servers. **Currently a verbatim copy of `generic`** — the starting point, so that divergence shows up commit by commit rather than as one unreviewable drop. |
 
 Both are judged against `misc/<series>/zabbly-config`, where `<series>` is
 the kernel's own major.minor series (`6.19`, `7.0`, `7.1`, …), detected
@@ -121,7 +121,7 @@ Run from the repository root:
 
 ```sh
 ./genconfig.sh                    # same as ./genconfig.sh generic
-./genconfig.sh incus-os           # any flavor under flavors/
+./genconfig.sh server           # any flavor under flavors/
 ./genconfig.sh generic --validate # also compare against the reference config
 ./genconfig.sh --help             # flags and defaults
 ```
