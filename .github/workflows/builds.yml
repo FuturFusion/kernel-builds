@@ -1,4 +1,9 @@
 name: Builds
+
+# Manual, single-flavor build for ad hoc testing. Actual build steps live in
+# _build-kernel.yml (shared with release-on-tag.yml, which builds every
+# flavor per release tag); this workflow is just a thin front end for
+# workflow_dispatch's inputs form.
 on:
   workflow_dispatch:
     inputs:
@@ -17,203 +22,40 @@ on:
         options:
           - generic
           - server
+      generate_config:
+        description: >
+          Generate a fresh config with genconfig.sh instead of using the one
+          already committed at configs/<kernel_version>/<flavor>-config. Off
+          by default: builds normally reuse whatever check-new-stable-release.yml
+          generated and a human already reviewed/merged. Turn this on for a
+          version that has no committed config yet, or to deliberately
+          re-run the generator.
+        required: false
+        default: false
+        type: boolean
       validate:
         description: >
           Also compare the generated config against misc/<series>/zabbly-config
           for this kernel's series, purely informational (shown in the job
-          summary). Off by default: a reference isn't needed to build a .deb,
-          only to check fidelity against it, and this lets you package a
-          kernel series that has no reference config yet. Turning this on
-          fails the run if that series has no reference.
+          summary). Only has an effect when "generate config" above is also
+          on. Off by default: a reference isn't needed to build a .deb, only
+          to check fidelity against it, and this lets you package a kernel
+          series that has no reference config yet. Turning this on fails the
+          run if that series has no reference.
         required: false
         default: false
         type: boolean
-
-permissions:
-  contents: read
 
 concurrency:
   group: ${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  build-kernel:
-    name: Build kernel
-    strategy:
-      fail-fast: false
-      matrix:
-        os:
-          - debian-13
-        arch:
-          - amd64
-    runs-on:
-      - self-hosted
-      - futurfusion-kernel-build
-      - arch-${{ matrix.arch }}
-      - image-${{ matrix.os }}
-
-    env:
-      FLAVOR: ${{ inputs.flavor }}
-      KERNEL_VERSION: ${{ inputs.kernel_version }}
-      VALIDATE: ${{ inputs.validate }}
-
-    steps:
-      - name: Check out
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      - name: Determine kernel series
-        run: |
-          set -euo pipefail
-          series="$(echo "${KERNEL_VERSION%%-*}" | cut -d. -f1,2)"
-          echo "series=$series" >> "$GITHUB_ENV"
-          echo "Kernel series: $series"
-
-      - name: Check the kernel series has a reference config
-        if: inputs.validate
-        run: |
-          set -euo pipefail
-          if [ ! -f "misc/${series}/zabbly-config" ]; then
-            echo "error: no misc/${series}/zabbly-config for kernel version '$KERNEL_VERSION' (series '$series')" >&2
-            echo "       available series: $(ls misc | tr '\n' ' ')" >&2
-            echo "       or turn off 'validate' to build without comparing against a reference" >&2
-            exit 1
-          fi
-
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes \
-            bc \
-            binutils \
-            bison \
-            build-essential \
-            cpio \
-            debhelper \
-            dpkg-dev \
-            flex \
-            git \
-            gnupg \
-            kmod \
-            libdw-dev \
-            libelf-dev \
-            libssl-dev \
-            python3 \
-            rsync \
-            xz-utils \
-            zstd
-
-          sudo apt-get install --yes pahole || true
-
-      # Building a .deb with `make deb-pkg` needs an actual git tree, not just
-      # an extracted tarball -- dpkg-source/the kernel's packaging scripts
-      # shell out to git for versioning info. This runner is ephemeral (fresh
-      # per job), so there's nothing to reuse or update -- every run clones
-      # from scratch.
-      #
-      # scripts/linux-bundle-clone (vendored from
-      # https://git.kernel.org/pub/scm/linux/kernel/git/mricon/korg-helpers.git)
-      # seeds that clone from a CDN-hosted bundle rather than cloning the
-      # entire stable tree directly from git.kernel.org, which is much
-      # slower, then points origin back at the real remote.
-      - name: Clone the stable kernel git tree
-        env:
-          STABLE_REMOTE: https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git
-        run: |
-          set -euo pipefail
-          mkdir -p ~/kernel
-          CDNBUNDLE="${STABLE_REMOTE}/clone.bundle" \
-            ./scripts/linux-bundle-clone "$STABLE_REMOTE" ~/kernel/linux-stable master
-
-      # Import via WKD (kernel.org's own authoritative key directory, not a
-      # public keyserver anyone could upload an unrelated same-email key to)
-      # rather than trusting whatever's already in the runner's keyring.
-      # GNUPGHOME is created ahead of time so `git verify-tag` (which shells
-      # out to gpg) never triggers gpg's own "create this directory? [Y/n]"
-      # prompt under CI's non-interactive shell.
-      - name: Import kernel.org release signing keys via WKD
-        env:
-          GNUPGHOME: ${{ runner.temp }}/gnupg
-        run: |
-          set -euo pipefail
-          mkdir -p -m 0700 "$GNUPGHOME"
-          gpg --batch --quiet --auto-key-locate wkd \
-            --locate-keys torvalds@kernel.org gregkh@kernel.org
-
-      # Verify before checkout, not after -- verify-tag only inspects the tag
-      # object already in the object database, so the working tree is never
-      # updated to unverified content even transiently.
-      - name: Verify and check out the release tag
-        env:
-          GNUPGHOME: ${{ runner.temp }}/gnupg
-        run: |
-          set -euo pipefail
-          git -C ~/kernel/linux-stable verify-tag "v${KERNEL_VERSION}"
-          git -C ~/kernel/linux-stable checkout --detach "v${KERNEL_VERSION}"
-
-      - name: Create .env
-        run: |
-          set -euo pipefail
-          sed -e "s|^KERNEL_TREE_PATH=.*|KERNEL_TREE_PATH=$HOME/kernel/linux-stable|" \
-              -e "s|^KERNEL_TREE_BUILD_PATH=.*|KERNEL_TREE_BUILD_PATH=${RUNNER_TEMP}/kernel-build|" \
-              .env.example > .env
-          cat .env
-
-      - name: Generate kernel config
-        run: |
-          ./check_slices.py "$FLAVOR"
-
-          if [ "$VALIDATE" = "true" ]; then
-            ./genconfig.sh "$FLAVOR" --normalize --validate
-          else
-            ./genconfig.sh "$FLAVOR" --normalize --no-validate
-          fi
-
-          source .env
-
-          if [ "$FLAVOR" != "generic" ]; then
-            GENERATED_CONFIG_PATH="${GENERATED_CONFIG_PATH}-${FLAVOR}"
-          fi
-          cp "$GENERATED_CONFIG_PATH" "${KERNEL_TREE_BUILD_PATH}/.config"
-
-      - name: Generate version string
-        env:
-          PKGARCH: "${{ matrix.arch }}"
-          PKGOS: "${{ matrix.os }}"
-        run: |
-          source .env
-
-          VERSION="$(make -C "$KERNEL_TREE_PATH" --no-print-directory kernelversion)-${PKGARCH}-$(date -u +%Y%m%d%H%M)-$(echo ${PKGOS} | sed "s/-//g")"
-          echo "${VERSION}"
-          echo "${VERSION}" > ../.version
-
-      - name: Build the kernel
-        env:
-          DEBEMAIL: "info@futurfusion.io"
-          DEBFULLNAME: "FuturFusion Kernel Builds"
-          KDEB_CHANGELOG_DIST: "${{ matrix.os }}"
-          KDEB_COMPRESS: "zstd"
-          PKGOS: "${{ matrix.os }}"
-        run: |
-          source .env
-
-          export KDEB_PKGVERSION="$(cat ../.version)"
-          export KDEB_SOURCENAME="linux-ff-${KDEB_PKGVERSION}"
-
-          make -C "$KERNEL_TREE_PATH" O="$KERNEL_TREE_BUILD_PATH" deb-pkg -j16 ||
-          make -C "$KERNEL_TREE_PATH" O="$KERNEL_TREE_BUILD_PATH" deb-pkg -j16
-
-      - name: Prepare the artifacts
-        run: |
-          source .env
-
-          mkdir -p out/
-          mv ${KERNEL_TREE_BUILD_PATH}/../linux-* out/
-
-      - name: Upload resulting build
-        uses: actions/upload-artifact@v4
-        continue-on-error: true
-        with:
-          name: ${{ matrix.os }}-${{ matrix.arch }}
-          path: out/*
+  build:
+    name: Build ${{ inputs.flavor }}
+    uses: ./.github/workflows/_build-kernel.yml
+    with:
+      kernel_version: ${{ inputs.kernel_version }}
+      flavor: ${{ inputs.flavor }}
+      generate_config: ${{ inputs.generate_config }}
+      validate: ${{ inputs.validate }}
