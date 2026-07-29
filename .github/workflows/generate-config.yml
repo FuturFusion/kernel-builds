@@ -11,6 +11,9 @@ on:
         default: true
         type: boolean
 
+permissions:
+  contents: read
+
 jobs:
   discover-series:
     name: Discover kernel series
@@ -20,7 +23,7 @@ jobs:
 
     steps:
       - name: Check out
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Every kernel series we test against is just a directory under misc/
       # holding its own zabbly-config -- misc/6.19/, misc/7.0/, misc/7.1/, ...
@@ -60,7 +63,7 @@ jobs:
 
     steps:
       - name: Check out
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: recursive
 
@@ -94,7 +97,7 @@ jobs:
       # key needs no hash beyond the version itself.
       - name: Cache kernel source tree
         id: kernel-cache
-        uses: actions/cache@v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/kernel/linux-${{ steps.kver.outputs.version }}
           key: linux-src-${{ steps.kver.outputs.version }}
@@ -145,8 +148,10 @@ jobs:
       # kernel tree we just downloaded, and the "Determine kernel version"
       # step above guarantees that tree matches $SERIES.
       - name: Generate the config
+        env:
+          NORMALIZE: ${{ inputs.normalize }}
         run: |
-          if [ "${{ inputs.normalize }}" = "true" ] || [ -z "${{ inputs.normalize }}" ]; then
+          if [ "$NORMALIZE" = "true" ] || [ -z "$NORMALIZE" ]; then
             ./genconfig.sh "$FLAVOR" --normalize --validate
           else
             ./genconfig.sh "$FLAVOR" --no-normalize --validate
@@ -223,7 +228,7 @@ jobs:
 
       - name: Upload generated config and analysis
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ matrix.flavor }}-${{ matrix.series }}-config
           path: |
