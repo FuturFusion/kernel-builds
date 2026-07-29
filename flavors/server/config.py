@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""IncusOS kernel flavor: a hypervisor/container host kernel.
+"""Server kernel flavor: a hypervisor/container host kernel.
 
 This is the *policy* half of the generator -- what to switch on and why. All
 the machinery it calls lives in genconfig.py; this file contains no Kconfig
@@ -9,7 +9,7 @@ STATUS: this is currently a verbatim copy of the generic flavor, taken as a
 starting point so that divergence from it is visible commit by commit rather
 than arriving as one unreviewable drop. Nothing here has been trimmed yet.
 
-Where it is going: IncusOS runs VMs and containers on x86_64 server hardware.
+Where it is going: this flavor runs VMs and containers on x86_64 server hardware.
 Everything the generic flavor carries for desktop and laptop use -- sound,
 graphics, media capture, wireless, consumer interconnects -- is exactly what
 this flavor exists to leave out. The block near the end that the generic
@@ -25,7 +25,7 @@ The data half lives in config_slices/ next to this file, loaded near the end.
 Anything that is genuinely per-symbol policy (no family, no gate, no prefix)
 belongs there rather than here.
 
-Run with ./genconfig.sh incus-os.
+Run with ./genconfig.sh server.
 """
 import os
 import sys
@@ -842,7 +842,7 @@ if "XDP_SOCKETS_DIAG" in kconf.syms:
 #
 # These subsystems (sound, graphics, media, wireless desktop/laptop hardware
 # support, etc.) are exactly what the rest of this project exists to leave
-# OUT of the production IncusOS kernel. They're enabled here purely to
+# OUT of the production server kernel. They're enabled here purely to
 # reproduce zabbly-config as a way of proving the genconfig.py machinery
 # itself (env setup, Kconfiglib fidelity, the subtree-walk technique) is
 # trustworthy. Do not copy this block into a production config.

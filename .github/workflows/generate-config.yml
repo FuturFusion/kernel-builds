@@ -51,7 +51,7 @@ jobs:
       # One (flavor, series) combination failing should not hide the others.
       fail-fast: false
       matrix:
-        flavor: [generic, incus-os]
+        flavor: [generic, server]
         series: ${{ fromJson(needs.discover-series.outputs.series) }}
 
     env:

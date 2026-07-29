@@ -16,7 +16,7 @@ on:
         type: choice
         options:
           - generic
-          - incus-os
+          - server
       validate:
         description: >
           Also compare the generated config against misc/<series>/zabbly-config

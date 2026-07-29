@@ -985,7 +985,7 @@ if "XDP_SOCKETS_DIAG" in kconf.syms:
 #
 # These subsystems (sound, graphics, media, wireless desktop/laptop hardware
 # support, etc.) are exactly what the rest of this project exists to leave
-# OUT of the production IncusOS kernel. They're enabled here purely to
+# OUT of the production server kernel. They're enabled here purely to
 # reproduce zabbly-config as a way of proving the genconfig.py machinery
 # itself (env setup, Kconfiglib fidelity, the subtree-walk technique) is
 # trustworthy. Do not copy this block into a production config.
