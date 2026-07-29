@@ -1,0 +1,268 @@
+name: Check for a new stable kernel release
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: >
+          Skip the "already have a config"/"already have an open PR" checks
+          and generate configs even if this version was already handled.
+          For testing the pipeline itself.
+        required: false
+        default: false
+        type: boolean
+      kernel_version_override:
+        description: >
+          Test the whole pipeline (generate, diff, branch, PR, comments)
+          against this exact kernel version instead of whatever
+          releases.json currently calls "stable". Use any real, already
+          released version -- it doesn't have to be the current latest, just
+          a real signed tag on the stable tree, since this only affects
+          which version gets processed, not how. Leave empty for normal
+          (scheduled) behavior.
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: check-new-stable-release
+  cancel-in-progress: false
+
+jobs:
+  check-and-generate:
+    name: Check for a new release and generate its configs
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+
+      # www.kernel.org/releases.json's single "stable" moniker entry is
+      # exactly kernel.org's own notion of "the current latest stable
+      # release" -- the same one shown as "latest stable" on the site's front
+      # page. There's also "longterm" (multiple concurrently supported LTS
+      # branches) and "mainline" (dev), but this workflow only follows the
+      # one "stable" line, not every branch this repo has a misc/<series>/
+      # reference for.
+      - name: Determine the latest stable kernel version
+        id: latest
+        run: |
+          set -euo pipefail
+          if [ -n "${{ inputs.kernel_version_override }}" ]; then
+            version="${{ inputs.kernel_version_override }}"
+            echo "Using override version: $version (not consulting releases.json)"
+          else
+            version="$(curl -fsSL https://www.kernel.org/releases.json \
+                       | jq -r '.releases[] | select(.moniker=="stable") | .version')"
+            if [ -z "$version" ] || [ "$version" = "null" ]; then
+              echo "error: could not determine the latest stable version from releases.json" >&2
+              exit 1
+            fi
+            echo "Latest stable: $version"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Check whether we already have configs for this version
+        id: existing
+        run: |
+          set -euo pipefail
+          if [ "${{ inputs.force }}" != "true" ] && [ -d "configs/${{ steps.latest.outputs.version }}" ]; then
+            echo "configs/${{ steps.latest.outputs.version }} already exists -- nothing to do"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check whether a PR for this version is already open
+        id: existing_pr
+        if: steps.existing.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          branch="kernel-config/v${{ steps.latest.outputs.version }}"
+          if [ "${{ inputs.force }}" != "true" ]; then
+            count="$(gh pr list --state open --head "$branch" --json number --jq 'length')"
+            if [ "$count" -gt 0 ]; then
+              echo "An open PR for $branch already exists -- nothing to do"
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
+      - name: Install kernel build dependencies
+        if: steps.existing.outputs.skip != 'true' && steps.existing_pr.outputs.skip != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential flex bison bc libelf-dev libssl-dev dwarves \
+            python3 gnupg xz-utils
+
+      # Config generation only needs the Kconfig tree on disk, not git
+      # history -- unlike builds.yml (which needs an actual git tree because
+      # `make deb-pkg` shells out to git for versioning), a plain verified
+      # tarball extraction is enough and much lighter than a full stable-tree
+      # clone.
+      - name: Download and verify the kernel source tree
+        if: steps.existing.outputs.skip != 'true' && steps.existing_pr.outputs.skip != 'true'
+        env:
+          TARGETDIR: ${{ runner.temp }}/kernel-dl
+          GNUPGHOME: ${{ runner.temp }}/gnupg
+        run: |
+          set -euo pipefail
+          mkdir -p "$TARGETDIR"
+          mkdir -p -m 0700 "$GNUPGHOME"
+          ./scripts/get-verified-tarball "${{ steps.latest.outputs.version }}"
+
+          mkdir -p ~/kernel
+          tar -xf "$TARGETDIR/linux-${{ steps.latest.outputs.version }}.tar.xz" -C ~/kernel
+          test -f ~/kernel/linux-"${{ steps.latest.outputs.version }}"/Makefile
+
+      - name: Create .env
+        if: steps.existing.outputs.skip != 'true' && steps.existing_pr.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          sed -e "s|^KERNEL_TREE_PATH=.*|KERNEL_TREE_PATH=$HOME/kernel/linux-${{ steps.latest.outputs.version }}|" \
+              -e "s|^KERNEL_TREE_BUILD_PATH=.*|KERNEL_TREE_BUILD_PATH=${RUNNER_TEMP}/kernel-build|" \
+              .env.example > .env
+
+      - name: Determine flavors
+        if: steps.existing.outputs.skip != 'true' && steps.existing_pr.outputs.skip != 'true'
+        id: flavors
+        run: |
+          set -euo pipefail
+          flavors="$(ls flavors | tr '\n' ' ')"
+          echo "Flavors: $flavors"
+          echo "list=$flavors" >> "$GITHUB_OUTPUT"
+
+      # --no-validate: this is tracking version-to-version drift, not
+      # fidelity against misc/<series>/zabbly-config (which may not even
+      # exist yet for a brand new series, or may be stale relative to this
+      # exact point release either way).
+      - name: Generate configs for every flavor
+        if: steps.existing.outputs.skip != 'true' && steps.existing_pr.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          outdir="configs/${{ steps.latest.outputs.version }}"
+          mkdir -p "$outdir"
+          for flavor in ${{ steps.flavors.outputs.list }}; do
+            ./check_slices.py "$flavor"
+            ./genconfig.sh "$flavor" --normalize --no-validate
+
+            if [ "$flavor" = "generic" ]; then
+              src="generated_config"
+            else
+              src="generated_config-$flavor"
+            fi
+            cp "$src" "$outdir/${flavor}-config"
+            cp "${src}-defconfig" "$outdir/${flavor}-config-defconfig"
+          done
+
+      # Both forms matter enough to show in full: the defconfig (minimal)
+      # diff is what actually changed with dependencies/defaults stripped
+      # out, but the full config is the one that's actually shipped, and a
+      # defconfig-only diff can hide a real difference if something's
+      # default value itself moved between kernel versions.
+      - name: Compute diffs against the previous tracked version
+        if: steps.existing.outputs.skip != 'true' && steps.existing_pr.outputs.skip != 'true'
+        id: diffs
+        run: |
+          set -euo pipefail
+          prev="$(ls configs 2>/dev/null | grep -vF "${{ steps.latest.outputs.version }}" | sort -V | tail -1 || true)"
+          echo "Previous tracked version: ${prev:-(none)}"
+          echo "prev=$prev" >> "$GITHUB_OUTPUT"
+
+          mkdir -p "${RUNNER_TEMP}/diffs"
+          for flavor in ${{ steps.flavors.outputs.list }}; do
+            for kind in config config-defconfig; do
+              new="configs/${{ steps.latest.outputs.version }}/${flavor}-${kind}"
+              old="configs/${prev}/${flavor}-${kind}"
+              out="${RUNNER_TEMP}/diffs/${flavor}.${kind}.diff"
+              if [ -n "$prev" ] && [ -f "$old" ]; then
+                diff -u "$old" "$new" > "$out" || true
+              else
+                echo "(no previous tracked version to diff against)" > "$out"
+              fi
+            done
+          done
+
+      - name: Create branch and commit the generated configs
+        if: steps.existing.outputs.skip != 'true' && steps.existing_pr.outputs.skip != 'true'
+        env:
+          GIT_AUTHOR_NAME: github-actions[bot]
+          GIT_AUTHOR_EMAIL: github-actions[bot]@users.noreply.github.com
+          GIT_COMMITTER_NAME: github-actions[bot]
+          GIT_COMMITTER_EMAIL: github-actions[bot]@users.noreply.github.com
+        run: |
+          set -euo pipefail
+          branch="kernel-config/v${{ steps.latest.outputs.version }}"
+          git checkout -b "$branch"
+          git add "configs/${{ steps.latest.outputs.version }}"
+          git commit -m "configs: add generated configs for Linux ${{ steps.latest.outputs.version }}"
+          git push origin "$branch" --force-with-lease
+
+      - name: Open the PR
+        if: steps.existing.outputs.skip != 'true' && steps.existing_pr.outputs.skip != 'true'
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          branch="kernel-config/v${{ steps.latest.outputs.version }}"
+          prev="${{ steps.diffs.outputs.prev }}"
+          body="Automatically generated configs for Linux ${{ steps.latest.outputs.version }}"
+          if [ -n "$prev" ]; then
+            body="$body, diffed against the previously tracked $prev."
+          fi
+          body="$body Per-flavor diffs follow as comments below."
+
+          url="$(gh pr create \
+            --title "configs: Linux ${{ steps.latest.outputs.version }}" \
+            --body "$body" \
+            --head "$branch" \
+            --base main)"
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+
+      # Each diff goes inside its own <details> spoiler -- GitHub renders
+      # that as collapsible, which matters here since a full-config diff can
+      # run to thousands of lines. Note the blank line right after
+      # <summary>: GitHub's markdown renderer needs it to treat what follows
+      # as markdown (and so render the ```diff fence as a real code block)
+      # rather than as a literal HTML blob.
+      - name: Post per-flavor diffs as PR comments
+        if: steps.existing.outputs.skip != 'true' && steps.existing_pr.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for flavor in ${{ steps.flavors.outputs.list }}; do
+            {
+              echo "### $flavor: diff vs ${{ steps.diffs.outputs.prev }}"
+              echo
+              echo "<details><summary>Full config diff</summary>"
+              echo
+              echo '```diff'
+              cat "${RUNNER_TEMP}/diffs/${flavor}.config.diff"
+              echo '```'
+              echo
+              echo "</details>"
+              echo
+              echo "<details><summary>Minimal (defconfig) diff</summary>"
+              echo
+              echo '```diff'
+              cat "${RUNNER_TEMP}/diffs/${flavor}.config-defconfig.diff"
+              echo '```'
+              echo
+              echo "</details>"
+            } | gh pr comment "${{ steps.pr.outputs.url }}" --body-file -
+          done

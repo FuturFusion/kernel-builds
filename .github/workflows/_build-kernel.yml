@@ -1,0 +1,293 @@
+name: Build a kernel (reusable)
+
+# Not meant to be run directly -- called by builds.yml (one flavor, manual
+# dispatch, timestamp-based package version) and release-on-tag.yml (every
+# flavor, triggered by a release tag, package version taken from the tag).
+# Keeping the actual build steps in one place means both stay in sync
+# instead of the same ~100 lines of bash drifting apart across two files.
+on:
+  workflow_call:
+    inputs:
+      kernel_version:
+        description: "Exact kernel version to build, e.g. 6.19.4 or 7.1.0-rc2."
+        required: true
+        type: string
+      flavor:
+        description: "Which flavor to build the .deb for."
+        required: true
+        type: string
+      generate_config:
+        description: >
+          Run genconfig.sh to generate a fresh config instead of using the
+          one already committed at configs/<kernel_version>/<flavor>-config.
+          Default off: the normal flow is check-new-stable-release.yml
+          generates and PRs a config, a human reviews/merges it, and only
+          then does a release tag build from that reviewed, committed
+          config -- not regenerate it from scratch at release time. Turn
+          this on for versions that don't have a committed config yet (ad
+          hoc testing) or to deliberately re-run the generator.
+        required: false
+        type: boolean
+        default: false
+      validate:
+        description: >
+          Also compare the generated config against misc/<series>/zabbly-config
+          for this kernel's series, purely informational (shown in the job
+          summary). Only has an effect when generate_config is also on --
+          there's nothing to validate when reusing an already-committed config.
+        required: false
+        type: boolean
+        default: false
+      package_version:
+        description: >
+          Exact .deb package version to use (e.g. "7.1.4-1"). If empty
+          (the default), a timestamp-based version is generated instead --
+          fine for ad hoc manual builds, but callers that need a stable,
+          reproducible version (e.g. a tagged release) should set this
+          explicitly rather than rely on the current time.
+        required: false
+        type: string
+        default: ""
+    outputs:
+      artifact_name:
+        description: "Name of the uploaded build artifact for this (flavor, kernel_version)."
+        value: ${{ jobs.build-kernel.outputs.artifact_name }}
+
+permissions:
+  contents: read
+
+jobs:
+  build-kernel:
+    name: Build kernel
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - debian-13
+        arch:
+          - amd64
+    runs-on:
+      - self-hosted
+      - futurfusion-kernel-build
+      - arch-${{ matrix.arch }}
+      - image-${{ matrix.os }}
+
+    outputs:
+      artifact_name: ${{ steps.artifact.outputs.name }}
+
+    env:
+      FLAVOR: ${{ inputs.flavor }}
+      KERNEL_VERSION: ${{ inputs.kernel_version }}
+      VALIDATE: ${{ inputs.validate }}
+      PACKAGE_VERSION: ${{ inputs.package_version }}
+      GENERATE_CONFIG: ${{ inputs.generate_config }}
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+
+      - name: Determine kernel series
+        run: |
+          set -euo pipefail
+          series="$(echo "${KERNEL_VERSION%%-*}" | cut -d. -f1,2)"
+          echo "series=$series" >> "$GITHUB_ENV"
+          echo "Kernel series: $series"
+
+      - name: Check the kernel series has a reference config
+        if: inputs.generate_config && inputs.validate
+        run: |
+          set -euo pipefail
+          if [ ! -f "misc/${series}/zabbly-config" ]; then
+            echo "error: no misc/${series}/zabbly-config for kernel version '$KERNEL_VERSION' (series '$series')" >&2
+            echo "       available series: $(ls misc | tr '\n' ' ')" >&2
+            echo "       or turn off 'validate' to build without comparing against a reference" >&2
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes \
+            bc \
+            binutils \
+            bison \
+            build-essential \
+            cpio \
+            debhelper \
+            dpkg-dev \
+            flex \
+            git \
+            gnupg \
+            kmod \
+            libdw-dev \
+            libelf-dev \
+            libssl-dev \
+            python3 \
+            rsync \
+            xz-utils \
+            zstd
+
+          sudo apt-get install --yes pahole || true
+
+      # Building a .deb with `make deb-pkg` needs an actual git tree, not just
+      # an extracted tarball -- dpkg-source/the kernel's packaging scripts
+      # shell out to git for versioning info. This runner is ephemeral (fresh
+      # per job), so there's nothing to reuse or update -- every run clones
+      # from scratch.
+      #
+      # scripts/linux-bundle-clone (vendored from
+      # https://git.kernel.org/pub/scm/linux/kernel/git/mricon/korg-helpers.git)
+      # seeds that clone from a CDN-hosted bundle rather than cloning the
+      # entire stable tree directly from git.kernel.org, which is much
+      # slower, then points origin back at the real remote.
+      - name: Clone the stable kernel git tree
+        env:
+          STABLE_REMOTE: https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git
+        run: |
+          set -euo pipefail
+          mkdir -p ~/kernel
+          CDNBUNDLE="${STABLE_REMOTE}/clone.bundle" \
+            ./scripts/linux-bundle-clone "$STABLE_REMOTE" ~/kernel/linux-stable master
+
+      # Import via WKD (kernel.org's own authoritative key directory, not a
+      # public keyserver anyone could upload an unrelated same-email key to)
+      # rather than trusting whatever's already in the runner's keyring.
+      # GNUPGHOME is created ahead of time so `git verify-tag` (which shells
+      # out to gpg) never triggers gpg's own "create this directory? [Y/n]"
+      # prompt under CI's non-interactive shell.
+      - name: Import kernel.org release signing keys via WKD
+        env:
+          GNUPGHOME: ${{ runner.temp }}/gnupg
+        run: |
+          set -euo pipefail
+          mkdir -p -m 0700 "$GNUPGHOME"
+          gpg --batch --quiet --auto-key-locate wkd \
+            --locate-keys torvalds@kernel.org gregkh@kernel.org
+
+      # Verify before checkout, not after -- verify-tag only inspects the tag
+      # object already in the object database, so the working tree is never
+      # updated to unverified content even transiently.
+      - name: Verify and check out the release tag
+        env:
+          GNUPGHOME: ${{ runner.temp }}/gnupg
+        run: |
+          set -euo pipefail
+          git -C ~/kernel/linux-stable verify-tag "v${KERNEL_VERSION}"
+          git -C ~/kernel/linux-stable checkout --detach "v${KERNEL_VERSION}"
+
+      - name: Create .env
+        run: |
+          set -euo pipefail
+          sed -e "s|^KERNEL_TREE_PATH=.*|KERNEL_TREE_PATH=$HOME/kernel/linux-stable|" \
+              -e "s|^KERNEL_TREE_BUILD_PATH=.*|KERNEL_TREE_BUILD_PATH=${RUNNER_TEMP}/kernel-build|" \
+              .env.example > .env
+          cat .env
+
+      - name: Generate kernel config
+        if: inputs.generate_config
+        run: |
+          ./check_slices.py "$FLAVOR"
+
+          if [ "$VALIDATE" = "true" ]; then
+            ./genconfig.sh "$FLAVOR" --normalize --validate
+          else
+            ./genconfig.sh "$FLAVOR" --normalize --no-validate
+          fi
+
+          source .env
+
+          if [ "$FLAVOR" != "generic" ]; then
+            GENERATED_CONFIG_PATH="${GENERATED_CONFIG_PATH}-${FLAVOR}"
+          fi
+          cp "$GENERATED_CONFIG_PATH" "${KERNEL_TREE_BUILD_PATH}/.config"
+
+      # The normal flow: check-new-stable-release.yml already generated and
+      # PR'd this config, a human already reviewed/merged it, so a release
+      # build uses exactly that reviewed file rather than re-running the
+      # generator (which could in principle produce something subtly
+      # different from what was actually reviewed, e.g. if genconfig.py or a
+      # flavor changed in between).
+      - name: Use the already-committed config
+        if: "!inputs.generate_config"
+        run: |
+          set -euo pipefail
+          source .env
+
+          config_file="configs/${KERNEL_VERSION}/${FLAVOR}-config"
+          if [ ! -f "$config_file" ]; then
+            echo "error: no committed config at $config_file for kernel version '$KERNEL_VERSION', flavor '$FLAVOR'." >&2
+            echo "       Either wait for/merge the PR check-new-stable-release.yml opens for this version," >&2
+            echo "       or re-run with 'generate config' enabled to generate one now." >&2
+            exit 1
+          fi
+
+          mkdir -p "$KERNEL_TREE_BUILD_PATH"
+          cp "$config_file" "${KERNEL_TREE_BUILD_PATH}/.config"
+
+      # BUILD_ID feeds into EXTRAVERSION below rather than KDEB_PKGVERSION
+      # directly -- it's just the part of the version that isn't the plain
+      # kernel version (e.g. "3" out of "7.1.5-3"), reused as the
+      # kernel-release-visible build identifier.
+      - name: Generate version string
+        env:
+          PKGARCH: "${{ matrix.arch }}"
+          PKGOS: "${{ matrix.os }}"
+        run: |
+          source .env
+
+          if [ -n "$PACKAGE_VERSION" ]; then
+            VERSION="$PACKAGE_VERSION"
+            BUILD_ID="${PACKAGE_VERSION#"${KERNEL_VERSION}"-}"
+          else
+            BUILD_ID="$(date -u +%Y%m%d%H%M)"
+            VERSION="$(make -C "$KERNEL_TREE_PATH" --no-print-directory kernelversion)-${PKGARCH}-${BUILD_ID}-$(echo ${PKGOS} | sed "s/-//g")"
+          fi
+          echo "${VERSION}"
+          echo "${VERSION}" > ../.version
+          echo "BUILD_ID=${BUILD_ID}" >> "$GITHUB_ENV"
+
+      # EXTRAVERSION (not CONFIG_LOCALVERSION) carries the build id and
+      # flavor: EXTRAVERSION lands right after VERSION.PATCHLEVEL.SUBLEVEL in
+      # the kernel's own release string (uname -r), with CONFIG_LOCALVERSION
+      # (the static "-futurfusion" from the committed config) always
+      # trailing after it -- so overriding EXTRAVERSION here, rather than
+      # touching CONFIG_LOCALVERSION, is what gets a release built from tag
+      # v7.1.5-3 to report itself as "7.1.5-3-<flavor>-futurfusion", with the
+      # per-build identifier before the constant branding suffix rather than
+      # after it.
+      - name: Build the kernel
+        env:
+          DEBEMAIL: "info@futurfusion.io"
+          DEBFULLNAME: "FuturFusion Kernel Builds"
+          KDEB_CHANGELOG_DIST: "${{ matrix.os }}"
+          KDEB_COMPRESS: "zstd"
+          PKGOS: "${{ matrix.os }}"
+        run: |
+          source .env
+
+          export KDEB_PKGVERSION="$(cat ../.version)"
+          export KDEB_SOURCENAME="linux-ff-${KDEB_PKGVERSION}"
+
+          make -C "$KERNEL_TREE_PATH" O="$KERNEL_TREE_BUILD_PATH" EXTRAVERSION="-${BUILD_ID}-${FLAVOR}" deb-pkg -j16 ||
+          make -C "$KERNEL_TREE_PATH" O="$KERNEL_TREE_BUILD_PATH" EXTRAVERSION="-${BUILD_ID}-${FLAVOR}" deb-pkg -j16
+
+      - name: Prepare the artifacts
+        run: |
+          source .env
+
+          mkdir -p out/
+          mv ${KERNEL_TREE_BUILD_PATH}/../linux-* out/
+
+      - name: Determine artifact name
+        id: artifact
+        run: |
+          echo "name=${{ matrix.os }}-${{ matrix.arch }}-${{ inputs.flavor }}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload resulting build
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        continue-on-error: true
+        with:
+          name: ${{ steps.artifact.outputs.name }}
+          path: out/*
