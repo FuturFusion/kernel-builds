@@ -85,10 +85,11 @@ if [ ! -f "$FLAVOR_SCRIPT" ]; then
 fi
 
 set -a
+# shellcheck disable=SC1091  # .env is generated at runtime, not present at lint time
 source "$SCRIPT_DIR/.env"
 set +a
 
-[ ! -z "$GENERATED_CONFIG_PATH" ]
+[ -n "$GENERATED_CONFIG_PATH" ]
 
 # Only the default flavor claims the plain output name; the rest are suffixed
 # so they cannot clobber each other.
@@ -112,10 +113,10 @@ case "$VALIDATE_CONFIG" in
        exit 1 ;;
 esac
 
-[ ! -z "$KERNEL_TREE_PATH" ]
+[ -n "$KERNEL_TREE_PATH" ]
 echo "Using kernel tree: $KERNEL_TREE_PATH"
 
-[ ! -z "$KERNEL_TREE_BUILD_PATH" ]
+[ -n "$KERNEL_TREE_BUILD_PATH" ]
 echo "Using kernel tree build path: $KERNEL_TREE_BUILD_PATH"
 
 # The kernel tree's own version, used for the config header comment
@@ -137,6 +138,7 @@ if [ "$VALIDATE_CONFIG" = "true" ]; then
     if [ ! -f "$REFERENCE_CONFIG" ]; then
         echo "error: no reference config for kernel series '$KERNEL_SERIES' (kernel tree at $KERNEL_TREE_PATH reports version '$KERNEL_VERSION')" >&2
         echo "       expected to find it at: $REFERENCE_CONFIG" >&2
+        # shellcheck disable=SC2012  # a friendly listing in an error message, not parsing-critical
         echo "       available series: $(ls "${SCRIPT_DIR}/misc" 2>/dev/null | tr '\n' ' ')" >&2
         echo "       or run without --validate to generate without comparing against a reference" >&2
         exit 1

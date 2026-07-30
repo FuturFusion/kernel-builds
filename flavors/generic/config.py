@@ -34,9 +34,14 @@ FLAVOR = os.path.basename(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.dirname(os.path.abspath(__file__)))))
 
-from genconfig import (  # noqa: E402  (import follows the path bootstrap above)
-    start, load_slices, finish,
-    enable_umbrella, enable_exact, enable_menu, enable_by_prefix,
+from genconfig import (
+    enable_by_prefix,
+    enable_exact,
+    enable_menu,
+    enable_umbrella,
+    finish,
+    load_slices,
+    start,
 )
 
 kconf = start()

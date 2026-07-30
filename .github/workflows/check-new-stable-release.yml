@@ -41,7 +41,12 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # persist-credentials stays at its default (true) here, unlike the
+      # other workflows -- "Create branch and commit..." below pushes with
+      # plain `git push`, which relies on actions/checkout's persisted
+      # credential helper rather than an explicit token.
       - name: Check out
+        # zizmor: ignore[artipacked]
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: recursive
@@ -129,7 +134,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$TARGETDIR"
-          mkdir -p -m 0700 "$GNUPGHOME"
+          mkdir -p "$GNUPGHOME"
+          chmod 0700 "$GNUPGHOME"
           ./scripts/get-verified-tarball "$VERSION"
 
           mkdir -p ~/kernel
@@ -151,7 +157,7 @@ jobs:
         id: flavors
         run: |
           set -euo pipefail
-          flavors="$(ls flavors | tr '\n' ' ')"
+          flavors="$(find flavors -mindepth 1 -maxdepth 1 -type d -printf '%f ')"
           echo "Flavors: $flavors"
           echo "list=$flavors" >> "$GITHUB_OUTPUT"
 
@@ -163,11 +169,12 @@ jobs:
         if: steps.existing.outputs.skip != 'true' && steps.existing_pr.outputs.skip != 'true'
         env:
           VERSION: ${{ steps.latest.outputs.version }}
+          FLAVORS: ${{ steps.flavors.outputs.list }}
         run: |
           set -euo pipefail
           outdir="configs/$VERSION"
           mkdir -p "$outdir"
-          for flavor in ${{ steps.flavors.outputs.list }}; do
+          for flavor in $FLAVORS; do
             ./check_slices.py "$flavor"
             ./genconfig.sh "$flavor" --normalize --no-validate
 
@@ -193,7 +200,7 @@ jobs:
           FLAVORS: ${{ steps.flavors.outputs.list }}
         run: |
           set -euo pipefail
-          prev="$(ls configs 2>/dev/null | grep -vF "$VERSION" | sort -V | tail -1 || true)"
+          prev="$(find configs -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null | grep -vF "$VERSION" | sort -V | tail -1 || true)"
           echo "Previous tracked version: ${prev:-(none)}"
           echo "prev=$prev" >> "$GITHUB_OUTPUT"
 
@@ -263,6 +270,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           FLAVORS: ${{ steps.flavors.outputs.list }}
           PREV: ${{ steps.diffs.outputs.prev }}
+          PR_URL: ${{ steps.pr.outputs.url }}
         run: |
           set -euo pipefail
           for flavor in $FLAVORS; do
@@ -284,5 +292,5 @@ jobs:
               echo '```'
               echo
               echo "</details>"
-            } | gh pr comment "${{ steps.pr.outputs.url }}" --body-file -
+            } | gh pr comment "$PR_URL" --body-file -
           done

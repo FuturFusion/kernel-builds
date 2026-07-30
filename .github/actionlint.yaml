@@ -1,0 +1,17 @@
+self-hosted-runner:
+  # Labels used by our self-hosted kernel-build runner (see _build-kernel.yml's
+  # runs-on:). actionlint has no way to know about these otherwise and would
+  # flag every one of them as an unknown/typoed GitHub-hosted label.
+  labels:
+    - futurfusion-kernel-build
+    - arch-amd64
+    - arch-arm64
+    - image-debian-13
+
+paths:
+  .github/workflows/release-on-tag.yml:
+    ignore:
+      # The release job is deliberately disabled with a literal `if: false`
+      # until the build path has been exercised for a while (see the comment
+      # above that job) -- not a mistake to be "fixed" by deleting the if:.
+      - 'constant expression "false" in condition'

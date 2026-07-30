@@ -11,7 +11,11 @@ flavors, not a conflict.
 Usage: ./check_slices.py [flavor ...]     (default: every flavor present)
 Exit status: 0 clean, 1 if anything overlaps.
 """
-import re, os, glob, sys, collections
+import collections
+import glob
+import os
+import re
+import sys
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 FLAVOR_DIR = os.path.join(SCRIPT_DIR, "flavors")
@@ -34,15 +38,16 @@ for flavor in flavors:
     occ = collections.defaultdict(list)
     for f in files:
         rel = os.path.relpath(f, SCRIPT_DIR)
-        for n, line in enumerate(open(f), 1):
-            s = line.strip()
-            m = re.match(r'CONFIG_([A-Z0-9_]+)=(.*)', s)
-            if m:
-                occ[m.group(1)].append((rel, n, m.group(2)))
-                continue
-            m = re.match(r'# CONFIG_([A-Z0-9_]+) is not set', s)
-            if m:
-                occ[m.group(1)].append((rel, n, 'n'))
+        with open(f) as fh:
+            for n, line in enumerate(fh, 1):
+                s = line.strip()
+                m = re.match(r'CONFIG_([A-Z0-9_]+)=(.*)', s)
+                if m:
+                    occ[m.group(1)].append((rel, n, m.group(2)))
+                    continue
+                m = re.match(r'# CONFIG_([A-Z0-9_]+) is not set', s)
+                if m:
+                    occ[m.group(1)].append((rel, n, 'n'))
 
     dup = {k: v for k, v in occ.items() if len(v) > 1}
     print(f"{flavor}: {len(occ)} distinct symbols across {len(files)} slices")
