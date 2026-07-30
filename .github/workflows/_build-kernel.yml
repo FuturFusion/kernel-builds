@@ -59,6 +59,7 @@ permissions:
 jobs:
   build-kernel:
     name: Build kernel
+    timeout-minutes: 210
     strategy:
       fail-fast: false
       matrix:
@@ -255,10 +256,10 @@ jobs:
       # EXTRAVERSION (not CONFIG_LOCALVERSION) carries the build id and
       # flavor: EXTRAVERSION lands right after VERSION.PATCHLEVEL.SUBLEVEL in
       # the kernel's own release string (uname -r), with CONFIG_LOCALVERSION
-      # (the static "-ff" from the committed config) always
+      # (the static "-futurfusion" from the committed config) always
       # trailing after it -- so overriding EXTRAVERSION here, rather than
       # touching CONFIG_LOCALVERSION, is what gets a release built from tag
-      # v7.1.5-3 to report itself as "7.1.5-3-<flavor>-ff", with the
+      # v7.1.5-3 to report itself as "7.1.5-3-<flavor>-futurfusion", with the
       # per-build identifier before the constant branding suffix rather than
       # after it.
       - name: Build the kernel
@@ -273,17 +274,39 @@ jobs:
 
           KDEB_PKGVERSION="$(cat ../.version)"
           export KDEB_PKGVERSION
-          export KDEB_SOURCENAME="linux-ff-${KDEB_PKGVERSION}"
+          export KDEB_SOURCENAME="linux-futurfusion-${KDEB_PKGVERSION}"
 
-          make -C "$KERNEL_TREE_PATH" O="$KERNEL_TREE_BUILD_PATH" EXTRAVERSION="-${BUILD_ID}-${FLAVOR}" deb-pkg -j16 ||
-          make -C "$KERNEL_TREE_PATH" O="$KERNEL_TREE_BUILD_PATH" EXTRAVERSION="-${BUILD_ID}-${FLAVOR}" deb-pkg -j16
+          make -C "$KERNEL_TREE_PATH" O="$KERNEL_TREE_BUILD_PATH" EXTRAVERSION="-${BUILD_ID}-${FLAVOR}" LOCALVERSION= deb-pkg -j16 ||
+          make -C "$KERNEL_TREE_PATH" O="$KERNEL_TREE_BUILD_PATH" EXTRAVERSION="-${BUILD_ID}-${FLAVOR}" LOCALVERSION= deb-pkg -j16
 
       - name: Prepare the artifacts
+        env:
+          PKGOS: "${{ matrix.os }}"
+          PKGARCH: "${{ matrix.arch }}"
         run: |
+          set -euo pipefail
           source .env
 
+          # make deb-pkg's source-package files (linux-futurfusion-<pkgver>_<pkgver>.
+          # debian.tar.gz/.dsc/.changes) and linux-libc-dev_<pkgver>_<arch>.deb
+          # don't encode the flavor, and KDEB_PKGVERSION is the same across
+          # every (os, arch, flavor) build in a release -- so files from
+          # different matrix legs would share a basename and clash once
+          # attached to the same GitHub release (which addresses assets by
+          # basename only -- it has no notion of folders/groups). Prefixing
+          # each file individually keeps every upload as small as the
+          # individual package that produced it (bundling into one per-leg
+          # archive was tried and reverted: the -dbg package alone can be
+          # multiple GB unstripped, and a single *release asset* must stay
+          # under GitHub's 2GiB-per-file limit -- upload-artifact has no such
+          # limit, so that splitting happens at release time instead, see
+          # release-on-tag.yml).
           mkdir -p out/
           mv "${KERNEL_TREE_BUILD_PATH}"/../linux-* out/
+          prefix="${PKGOS}-${PKGARCH}-${FLAVOR}"
+          for f in out/*; do
+            mv "$f" "out/${prefix}-$(basename "$f")"
+          done
 
       - name: Determine artifact name
         id: artifact

@@ -100,26 +100,54 @@ jobs:
       validate: false
       package_version: ${{ needs.parse-tag.outputs.package_version }}
 
-  # TODO: disabled for now -- come back to this once the build path itself
-  # has been exercised for a while. Builds still run and upload their
-  # artifacts as regular workflow artifacts either way; only the "publish a
-  # GitHub Release" step is switched off. Flip `if: false` back on to
-  # re-enable.
   release:
     name: Create the GitHub release
     needs: [parse-tag, build]
-    if: false
     runs-on: ubuntu-latest
-    # Only this job creates a release, so only this job gets contents: write
-    # -- parse-tag and build (above) need nothing beyond the workflow-level
-    # contents: read.
     permissions:
       contents: write
     steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
       - name: Download all built artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: artifacts
+
+      # GitHub caps a single *release asset* at 2GiB -- the unstripped -dbg
+      # package can exceed that on its own. upload-artifact has no such
+      # limit, so the workflow artifacts downloaded above are left whole;
+      # anything at or over the limit is split here, right before it's
+      # attached to the release, into <2GiB chunks named
+      # <file>.partNNNofMMM (1-indexed, zero-padded) so the total part count
+      # is visible from the filename alone. Reassemble with:
+      # cat <file>.part*of<MMM> > <file>
+      - name: Split any release assets over GitHub's 2GiB limit
+        run: |
+          set -euo pipefail
+          asset_limit=2147483648
+          chunk_bytes=$((1900 * 1024 * 1024)) # comfortable margin under the cap
+          find artifacts -type f -print0 | while IFS= read -r -d '' f; do
+            size=$(stat -c%s "$f")
+            if [ "$size" -lt "$asset_limit" ]; then
+              continue
+            fi
+
+            total=$(( (size + chunk_bytes - 1) / chunk_bytes ))
+            split -b "$chunk_bytes" -d -a 3 "$f" "${f}.part-"
+
+            n=0
+            while [ "$n" -lt "$total" ]; do
+              idx=$((n + 1))
+              mv "$(printf '%s.part-%03d' "$f" "$n")" \
+                 "$(printf '%s.part%03dof%03d' "$f" "$idx" "$total")"
+              n=$((n + 1))
+            done
+            rm "$f"
+          done
 
       - name: Create the release and upload artifacts
         env:
@@ -135,7 +163,12 @@ jobs:
             exit 1
           fi
 
+          notes="Kernel packages for Linux $KERNEL_VERSION, flavors: $FLAVORS."
+          if find artifacts -type f -name '*.part[0-9][0-9][0-9]of[0-9][0-9][0-9]' | grep -q .; then
+            notes="$notes"$'\n\n'"Some files (e.g. the -dbg package) exceed GitHub's 2GiB per-file limit and are split into \`<file>.partNNNofMMM\` chunks. Reassemble before use: \`cat <file>.part*of<MMM> > <file>\` (substitute the actual MMM from the filenames, e.g. \`of003\`)."
+          fi
+
           gh release create "$TAG" \
             --title "Linux $KERNEL_VERSION ($TAG)" \
-            --notes "Kernel packages for Linux $KERNEL_VERSION, flavors: $FLAVORS." \
+            --notes "$notes" \
             "${files[@]}"
