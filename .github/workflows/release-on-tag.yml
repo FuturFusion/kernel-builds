@@ -57,6 +57,32 @@ jobs:
           echo "Flavors: $flavors"
           echo "list=$flavors" >> "$GITHUB_OUTPUT"
 
+      # Fail fast, here on a plain ubuntu-latest runner, rather than after the
+      # self-hosted build job has already installed dependencies and cloned
+      # the multi-GB stable tree for every flavor -- release builds always
+      # reuse an already-committed config (see _build-kernel.yml), so a
+      # missing one is a release-blocking problem, not a build-time one.
+      - name: Check that a committed config exists for every flavor
+        env:
+          KERNEL_VERSION: ${{ steps.parse.outputs.kernel_version }}
+          FLAVORS: ${{ steps.flavors.outputs.list }}
+        run: |
+          set -euo pipefail
+          missing=0
+          for flavor in $(jq -r '.[]' <<< "$FLAVORS"); do
+            config_file="configs/${KERNEL_VERSION}/${flavor}-config"
+            if [ ! -f "$config_file" ]; then
+              echo "error: no committed config at $config_file for kernel version '$KERNEL_VERSION', flavor '$flavor'." >&2
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            echo "       Either wait for/merge the PR check-new-stable-release.yml opens for this version," >&2
+            echo "       or build that flavor manually first via builds.yml with 'generate config' enabled." >&2
+            exit 1
+          fi
+          echo "Config present for every flavor of Linux $KERNEL_VERSION."
+
   build:
     name: Build ${{ matrix.flavor }}
     needs: parse-tag
