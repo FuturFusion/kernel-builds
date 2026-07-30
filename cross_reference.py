@@ -30,7 +30,7 @@ def main():
     capped_by_umbrella = defaultdict(list)
     with open(sys.argv[1]) as f:
         for line in f:
-            label, name, val = line.rstrip("\n").split("\t")
+            label, name, _ = line.rstrip("\n").split("\t")
             capped_by_umbrella[label].append(name)
 
     missing = set()

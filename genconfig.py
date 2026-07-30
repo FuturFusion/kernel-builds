@@ -24,13 +24,19 @@ enable_umbrella both SETS and WALKS; enable_exact only sets. That distinction
 is load-bearing -- see the STAGING/ACCESSIBILITY note in flavors/generic/config.py.
 """
 import os
+
 import kconfiglib
 
 __all__ = [
-    "here",
-    "start", "load_slices", "finish",
-    "enable_subtree", "enable_umbrella", "enable_exact", "enable_menu",
     "enable_by_prefix",
+    "enable_exact",
+    "enable_menu",
+    "enable_subtree",
+    "enable_umbrella",
+    "finish",
+    "here",
+    "load_slices",
+    "start",
 ]
 
 
@@ -202,20 +208,18 @@ def enable_subtree(node, label=None):
             if sym.orig_type == kconfiglib.TRISTATE:
                 if not _is_denied(sym.name):
                     attempt = 1  # m -- only the driver itself
-            elif sym.orig_type == kconfiglib.BOOL:
-                # Previously only touched bool symbols WITH nested
-                # children (category gates like MEDIA_SUPPORT_FILTER).
-                # That silently skipped every leaf bool with no children
-                # of its own -- which turned out to include genuine
-                # feature toggles, not just debug flags (e.g.
-                # IP_VS_PROTO_TCP/UDP: plain "yes I want this protocol"
-                # bools, no sub-options, confirmed still wrong vs
-                # zabbly-config despite IP_VS's own walk running). The
-                # deny-list is the actual safety mechanism here, not
-                # "does it have children" -- so touch every bool,
-                # gate or leaf alike, and let the deny-list do its job.
-                if not _is_denied(sym.name):
-                    attempt = 2  # y
+            # Previously only touched bool symbols WITH nested children
+            # (category gates like MEDIA_SUPPORT_FILTER). That silently
+            # skipped every leaf bool with no children of its own -- which
+            # turned out to include genuine feature toggles, not just debug
+            # flags (e.g. IP_VS_PROTO_TCP/UDP: plain "yes I want this
+            # protocol" bools, no sub-options, confirmed still wrong vs
+            # zabbly-config despite IP_VS's own walk running). The deny-list
+            # is the actual safety mechanism here, not "does it have
+            # children" -- so touch every bool, gate or leaf alike, and let
+            # the deny-list do its job.
+            elif sym.orig_type == kconfiglib.BOOL and not _is_denied(sym.name):
+                attempt = 2  # y
 
             if attempt is not None:
                 sym.set_value(attempt)

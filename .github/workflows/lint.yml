@@ -1,0 +1,99 @@
+name: Lint
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lint-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    name: Python (ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install ruff
+        run: pip install --user --break-system-packages ruff==0.16.0
+
+      - name: Lint
+        # yocto-kernel-tools and kernel-hardening-checker are vendored git
+        # submodules -- not our code, so not our lint problem.
+        run: ~/.local/bin/ruff check --exclude yocto-kernel-tools --exclude kernel-hardening-checker .
+
+  shellcheck:
+    name: Shell scripts (shellcheck)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # scripts/get-verified-tarball and scripts/linux-bundle-clone are
+      # vendored from kernel.org's korg-helpers with only a couple of lines
+      # patched (see the header comment in each) -- kept close to upstream
+      # for easy re-syncing, so not held to our own shellcheck bar either.
+      - name: Find our own shell scripts
+        id: find
+        run: |
+          set -euo pipefail
+          mapfile -t scripts < <(find . \
+            \( -path ./yocto-kernel-tools -o -path ./kernel-hardening-checker -o -path ./.git -o -path ./scripts \) -prune \
+            -o -type f -print0 | xargs -0 grep -lI '^#!.*\(bash\|sh\)' 2>/dev/null)
+          printf '%s\n' "${scripts[@]}"
+          {
+            echo "list<<EOF"
+            printf '%s\n' "${scripts[@]}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Run shellcheck
+        env:
+          SCRIPTS: ${{ steps.find.outputs.list }}
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC2086  # intentional word-splitting: SCRIPTS is a newline-separated path list
+          shellcheck $SCRIPTS
+
+  actionlint:
+    name: Workflows (actionlint, incl. embedded shellcheck)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install actionlint
+        env:
+          ACTIONLINT_VERSION: "1.7.12"
+        run: |
+          set -euo pipefail
+          bash <(curl -fsSL "https://raw.githubusercontent.com/rhysd/actionlint/v${ACTIONLINT_VERSION}/scripts/download-actionlint.bash") "$ACTIONLINT_VERSION" /tmp
+
+      - name: Run actionlint
+        run: /tmp/actionlint -color
+
+  zizmor:
+    name: Workflows (zizmor security audit)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install zizmor
+        run: pip install --user --break-system-packages zizmor==1.28.0
+
+      - name: Run zizmor
+        run: ~/.local/bin/zizmor --no-progress .github/workflows/

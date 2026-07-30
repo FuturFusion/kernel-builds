@@ -27,6 +27,7 @@ if [ -z "$CONFIG" ]; then
         echo "error: no .env -- copy .env.example to .env, or pass a config path" >&2
         exit 1
     fi
+    # shellcheck disable=SC1091  # .env is generated at runtime, not present at lint time
     . "$DIR/.env"
     CONFIG="$GENERATED_CONFIG_PATH"
 fi

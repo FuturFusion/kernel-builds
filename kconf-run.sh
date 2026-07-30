@@ -89,7 +89,8 @@ KERNEL_SRC="$(cd "$KERNEL_SRC" && pwd)"  # normalize to absolute path
 
 export srctree="$KERNEL_SRC"
 export ARCH SRCARCH CC LD
-export KERNELVERSION="$(make -s -C "$KERNEL_SRC" kernelversion)"
+KERNELVERSION="$(make -s -C "$KERNEL_SRC" kernelversion)"
+export KERNELVERSION
 
 # Recent kernels (the PAHOLE_VERSION computation was hoisted out of
 # init/Kconfig and into the top-level Makefile in Dec 2025, mirroring how
@@ -99,7 +100,8 @@ export KERNELVERSION="$(make -s -C "$KERNEL_SRC" kernelversion)"
 # (e.g. DEBUG_INFO_BTF) show up as "non-int default (undefined)".
 export PAHOLE="${PAHOLE:-pahole}"
 if [[ -x "$KERNEL_SRC/scripts/pahole-version.sh" ]]; then
-    export PAHOLE_VERSION="$("$KERNEL_SRC/scripts/pahole-version.sh" "$PAHOLE" 2>/dev/null || echo 0)"
+    PAHOLE_VERSION="$("$KERNEL_SRC/scripts/pahole-version.sh" "$PAHOLE" 2>/dev/null || echo 0)"
+    export PAHOLE_VERSION
 else
     export PAHOLE_VERSION=0
 fi
@@ -110,7 +112,8 @@ fi
 # hardcoding a recent version here makes those symbols resolve identically.
 # Drop this override once pahole >= 1.26 is installed on the build host.
 export PAHOLE_VERSION=130
-export CC_VERSION_TEXT="$("$CC" --version 2>/dev/null | head -n1)"
+CC_VERSION_TEXT="$("$CC" --version 2>/dev/null | head -n1)"
+export CC_VERSION_TEXT
 
 # Resolve the output config to an absolute path in the directory you ran
 # this from -- NOT the kernel tree, even though we're about to cd there.

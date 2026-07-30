@@ -88,6 +88,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: recursive
+          persist-credentials: false
 
       - name: Determine kernel series
         run: |
@@ -102,6 +103,7 @@ jobs:
           set -euo pipefail
           if [ ! -f "misc/${series}/zabbly-config" ]; then
             echo "error: no misc/${series}/zabbly-config for kernel version '$KERNEL_VERSION' (series '$series')" >&2
+            # shellcheck disable=SC2012  # a friendly listing in an error message, not parsing-critical
             echo "       available series: $(ls misc | tr '\n' ' ')" >&2
             echo "       or turn off 'validate' to build without comparing against a reference" >&2
             exit 1
@@ -163,7 +165,8 @@ jobs:
           GNUPGHOME: ${{ runner.temp }}/gnupg
         run: |
           set -euo pipefail
-          mkdir -p -m 0700 "$GNUPGHOME"
+          mkdir -p "$GNUPGHOME"
+          chmod 0700 "$GNUPGHOME"
           gpg --batch --quiet --auto-key-locate wkd \
             --locate-keys torvalds@kernel.org gregkh@kernel.org
 
@@ -243,7 +246,7 @@ jobs:
             BUILD_ID="${PACKAGE_VERSION#"${KERNEL_VERSION}"-}"
           else
             BUILD_ID="$(date -u +%Y%m%d%H%M)"
-            VERSION="$(make -C "$KERNEL_TREE_PATH" --no-print-directory kernelversion)-${PKGARCH}-${BUILD_ID}-$(echo ${PKGOS} | sed "s/-//g")"
+            VERSION="$(make -C "$KERNEL_TREE_PATH" --no-print-directory kernelversion)-${PKGARCH}-${BUILD_ID}-${PKGOS//-/}"
           fi
           echo "${VERSION}"
           echo "${VERSION}" > ../.version
@@ -268,7 +271,8 @@ jobs:
         run: |
           source .env
 
-          export KDEB_PKGVERSION="$(cat ../.version)"
+          KDEB_PKGVERSION="$(cat ../.version)"
+          export KDEB_PKGVERSION
           export KDEB_SOURCENAME="linux-ff-${KDEB_PKGVERSION}"
 
           make -C "$KERNEL_TREE_PATH" O="$KERNEL_TREE_BUILD_PATH" EXTRAVERSION="-${BUILD_ID}-${FLAVOR}" deb-pkg -j16 ||
@@ -279,12 +283,15 @@ jobs:
           source .env
 
           mkdir -p out/
-          mv ${KERNEL_TREE_BUILD_PATH}/../linux-* out/
+          mv "${KERNEL_TREE_BUILD_PATH}"/../linux-* out/
 
       - name: Determine artifact name
         id: artifact
+        env:
+          PKGOS: "${{ matrix.os }}"
+          PKGARCH: "${{ matrix.arch }}"
         run: |
-          echo "name=${{ matrix.os }}-${{ matrix.arch }}-${{ inputs.flavor }}" >> "$GITHUB_OUTPUT"
+          echo "name=${PKGOS}-${PKGARCH}-${FLAVOR}" >> "$GITHUB_OUTPUT"
 
       - name: Upload resulting build
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

@@ -24,6 +24,8 @@ jobs:
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # Every kernel series we test against is just a directory under misc/
       # holding its own zabbly-config -- misc/6.19/, misc/7.0/, misc/7.1/, ...
@@ -66,6 +68,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: recursive
+          persist-credentials: false
 
       - name: Install kernel build dependencies
         run: |
@@ -104,10 +107,13 @@ jobs:
 
       - name: Download kernel source tree
         if: steps.kernel-cache.outputs.cache-hit != 'true'
+        env:
+          KVER_VERSION: ${{ steps.kver.outputs.version }}
+          KVER_MAJOR: ${{ steps.kver.outputs.major }}
         run: |
           set -euo pipefail
-          v="${{ steps.kver.outputs.version }}"
-          url="https://cdn.kernel.org/pub/linux/kernel/v${{ steps.kver.outputs.major }}.x/linux-${v}.tar.xz"
+          v="$KVER_VERSION"
+          url="https://cdn.kernel.org/pub/linux/kernel/v${KVER_MAJOR}.x/linux-${v}.tar.xz"
           mkdir -p ~/kernel
           echo "Fetching $url"
           curl -fSL --retry 3 "$url" | tar -xJ -C ~/kernel
@@ -118,9 +124,11 @@ jobs:
       # genconfig.sh works that out itself from KERNEL_TREE_PATH's own
       # reported version, same as a local run gets.
       - name: Create .env
+        env:
+          KVER_VERSION: ${{ steps.kver.outputs.version }}
         run: |
           set -euo pipefail
-          sed -e "s|^KERNEL_TREE_PATH=.*|KERNEL_TREE_PATH=$HOME/kernel/linux-${{ steps.kver.outputs.version }}|" \
+          sed -e "s|^KERNEL_TREE_PATH=.*|KERNEL_TREE_PATH=$HOME/kernel/linux-${KVER_VERSION}|" \
               -e "s|^KERNEL_TREE_BUILD_PATH=.*|KERNEL_TREE_BUILD_PATH=$RUNNER_TEMP/kernel-build|" \
               .env.example > .env
           cat .env
@@ -161,12 +169,12 @@ jobs:
         if: always()
         run: |
           set -euo pipefail
-          if [ ! -f output/${FLAVOR}/diff ]; then
+          if [ ! -f "output/${FLAVOR}/diff" ]; then
             echo "output/${FLAVOR}/diff was not produced -- the generation step must have failed."
             exit 1
           fi
 
-          lines=$(wc -l < output/${FLAVOR}/diff)
+          lines=$(wc -l < "output/${FLAVOR}/diff")
           echo "::notice::output/${FLAVOR}/diff ($SERIES) is $lines line(s)"
 
           {
@@ -185,16 +193,17 @@ jobs:
             echo
             echo 'Either way, some divergence is environmental rather than ours:'
             echo 'the reference config was built with a different compiler, so'
+            # shellcheck disable=SC2016  # literal markdown backticks, not meant to expand
             echo '`CC_VERSION_TEXT` and any gcc-version-gated symbols will differ'
             echo 'from what this runner produces.'
             echo
             echo '```diff'
-            cat output/${FLAVOR}/diff
+            cat "output/${FLAVOR}/diff"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
           echo "----- output/${FLAVOR}/diff -----"
-          cat output/${FLAVOR}/diff
+          cat "output/${FLAVOR}/diff"
           echo "-----------------------"
 
       # Informational only. kernel-hardening-checker exits 0 whatever the
@@ -206,7 +215,7 @@ jobs:
           set -euo pipefail
           ./check-config-hardening.sh "$CONFIG_FILE" | tee "output/$FLAVOR/hardening.txt"
 
-          echo "::notice::$(grep -F '[+] Check is finished:' output/${FLAVOR}/hardening.txt \
+          echo "::notice::$(grep -F '[+] Check is finished:' "output/${FLAVOR}/hardening.txt" \
                             || echo 'hardening check finished')"
 
           {
@@ -220,7 +229,7 @@ jobs:
             echo '<details><summary>Full report</summary>'
             echo
             echo '```'
-            cat output/${FLAVOR}/hardening.txt
+            cat "output/${FLAVOR}/hardening.txt"
             echo '```'
             echo
             echo '</details>'
