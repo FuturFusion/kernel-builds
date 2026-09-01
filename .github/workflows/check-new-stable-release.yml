@@ -51,13 +51,6 @@ jobs:
         with:
           submodules: recursive
 
-      # www.kernel.org/releases.json's single "stable" moniker entry is
-      # exactly kernel.org's own notion of "the current latest stable
-      # release" -- the same one shown as "latest stable" on the site's front
-      # page. There's also "longterm" (multiple concurrently supported LTS
-      # branches) and "mainline" (dev), but this workflow only follows the
-      # one "stable" line, not every branch this repo has a misc/<series>/
-      # reference for.
       - name: Determine the latest stable kernel version
         id: latest
         env:
@@ -69,7 +62,8 @@ jobs:
             echo "Using override version: $version (not consulting releases.json)"
           else
             version="$(curl -fsSL https://www.kernel.org/releases.json \
-                       | jq -r '.releases[] | select(.moniker=="stable") | .version')"
+                       | jq -r '.releases[] | select(.moniker=="stable") | .version' \
+                       | sort -V | head -1)"
             if [ -z "$version" ] || [ "$version" = "null" ]; then
               echo "error: could not determine the latest stable version from releases.json" >&2
               exit 1
