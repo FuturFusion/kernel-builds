@@ -22,6 +22,7 @@ on:
         options:
           - generic
           - server
+          - virtio
       generate_config:
         description: >
           Generate a fresh config with genconfig.sh instead of using the one
