@@ -1,0 +1,143 @@
+name: Generate flavor configs
+description: >
+  Download and cryptographically verify a kernel source tree, generate
+  configs/<version>/ for every automated flavor (those without a
+  flavors/<name>/.noautomation marker), and compute per-flavor unified diffs
+  against a base version already tracked under configs/. The diffs are left
+  in ${RUNNER_TEMP}/diffs/<flavor>.<kind>.diff for the caller to post.
+
+  Assumes the repository is already checked out (with submodules) in the
+  current working directory.
+
+inputs:
+  version:
+    description: "Exact kernel version to generate for, e.g. 7.2.4."
+    required: true
+  diff-base:
+    description: >
+      Version under configs/ to diff the freshly generated configs against.
+      Empty (the default) means auto-detect: the highest configs/<x> other
+      than <version>.
+    required: false
+    default: ""
+
+outputs:
+  flavors:
+    description: "Space-separated list of flavors that were generated."
+    value: ${{ steps.flavors.outputs.list }}
+  diff-base:
+    description: "The version actually diffed against (empty if there was none)."
+    value: ${{ steps.diffs.outputs.base }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install kernel build dependencies
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends \
+          build-essential flex bison bc libelf-dev libssl-dev dwarves \
+          python3 gnupg xz-utils
+
+    # Config generation only needs the Kconfig tree on disk, not git history,
+    # so a plain verified tarball extraction is enough and much lighter than
+    # a full stable-tree clone.
+    - name: Download and verify the kernel source tree
+      shell: bash
+      env:
+        TARGETDIR: ${{ runner.temp }}/kernel-dl
+        GNUPGHOME: ${{ runner.temp }}/gnupg
+        VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        mkdir -p "$TARGETDIR"
+        mkdir -p "$GNUPGHOME"
+        chmod 0700 "$GNUPGHOME"
+        ./scripts/get-verified-tarball "$VERSION"
+
+        mkdir -p ~/kernel
+        tar -xf "$TARGETDIR/linux-$VERSION.tar.xz" -C ~/kernel
+        test -f ~/kernel/linux-"$VERSION"/Makefile
+
+    - name: Create .env
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        sed -e "s|^KERNEL_TREE_PATH=.*|KERNEL_TREE_PATH=$HOME/kernel/linux-$VERSION|" \
+            -e "s|^KERNEL_TREE_BUILD_PATH=.*|KERNEL_TREE_BUILD_PATH=${RUNNER_TEMP}/kernel-build|" \
+            .env.example > .env
+
+    # A flavor with a flavors/<name>/.noautomation marker is deliberately left
+    # out of everything automated. `./genconfig.sh <name>` still works by hand.
+    - name: Determine flavors
+      id: flavors
+      shell: bash
+      run: |
+        set -euo pipefail
+        flavors="$(find flavors -mindepth 1 -maxdepth 1 -type d \
+                     ! -exec test -e '{}/.noautomation' ';' -printf '%f ')"
+        echo "Flavors: $flavors"
+        echo "list=$flavors" >> "$GITHUB_OUTPUT"
+
+    # --no-validate: this tracks version-to-version drift, not fidelity
+    # against misc/<series>/zabbly-config (which may not exist yet for a brand
+    # new series, or may be stale relative to this exact point release).
+    - name: Generate configs for every flavor
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+        FLAVORS: ${{ steps.flavors.outputs.list }}
+      run: |
+        set -euo pipefail
+        outdir="configs/$VERSION"
+        mkdir -p "$outdir"
+        for flavor in $FLAVORS; do
+          ./check_slices.py "$flavor"
+          ./genconfig.sh "$flavor" --normalize --no-validate
+
+          if [ "$flavor" = "generic" ]; then
+            src="generated_config"
+          else
+            src="generated_config-$flavor"
+          fi
+          cp "$src" "$outdir/${flavor}-config"
+          cp "${src}-defconfig" "$outdir/${flavor}-config-defconfig"
+        done
+
+    # Both forms matter: the defconfig (minimal) diff is what actually changed
+    # with dependencies/defaults stripped out, but the full config is what
+    # ships, and a defconfig-only diff can hide a real difference if a
+    # default value itself moved between kernel versions.
+    - name: Compute diffs against the base version
+      id: diffs
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+        FLAVORS: ${{ steps.flavors.outputs.list }}
+        DIFF_BASE: ${{ inputs.diff-base }}
+      run: |
+        set -euo pipefail
+        base="$DIFF_BASE"
+        if [ -z "$base" ]; then
+          base="$(find configs -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null \
+                  | grep -vFx "$VERSION" | sort -V | tail -1 || true)"
+        fi
+        echo "Diff base: ${base:-(none)}"
+        echo "base=$base" >> "$GITHUB_OUTPUT"
+
+        mkdir -p "${RUNNER_TEMP}/diffs"
+        for flavor in $FLAVORS; do
+          for kind in config config-defconfig; do
+            new="configs/$VERSION/${flavor}-${kind}"
+            old="configs/${base}/${flavor}-${kind}"
+            out="${RUNNER_TEMP}/diffs/${flavor}.${kind}.diff"
+            if [ -n "$base" ] && [ -f "$old" ]; then
+              diff -u "$old" "$new" > "$out" || true
+            else
+              echo "(no base version to diff against)" > "$out"
+            fi
+          done
+        done

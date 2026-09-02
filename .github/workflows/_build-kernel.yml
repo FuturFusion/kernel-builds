@@ -67,7 +67,7 @@ jobs:
           - debian-13
         arch:
           - amd64
-          - arm64
+          #- arm64
     runs-on:
       - self-hosted
       - futurfusion-kernel-build

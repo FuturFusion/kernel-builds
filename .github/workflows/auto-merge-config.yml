@@ -1,0 +1,362 @@
+name: Auto-merge config PRs
+
+on:
+  workflow_run:
+    # zizmor: ignore[dangerous-triggers]
+    workflows: ["Check for a new stable kernel release"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: >
+          PR number to evaluate. Default: the newest open PR whose branch
+          starts with kernel-config/v.
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: auto-merge-config
+  cancel-in-progress: false
+
+jobs:
+  evaluate:
+    name: Evaluate and maybe merge
+    runs-on: ubuntu-latest
+    # contents: write  -- push the v<version>-1 tag
+    # pull-requests: write -- comment on and merge the config PR
+    permissions:
+      contents: write
+      pull-requests: write
+    # For workflow_run, only proceed if the upstream run actually succeeded.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    outputs:
+      merge: ${{ steps.gate.outputs.merge }}
+      tag: ${{ steps.merge.outputs.tag }}
+    steps:
+      - name: Check out
+        # zizmor: ignore[artipacked]
+        # "Merge and tag" pushes the new tag with plain `git push`, which
+        # relies on actions/checkout's persisted credential helper -- same
+        # pattern as check-new-stable-release.yml.
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Find the config PR
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_INPUT: ${{ inputs.pr }}
+        run: |
+          set -euo pipefail
+          if [ -n "${PR_INPUT:-}" ]; then
+            num="$PR_INPUT"
+          else
+            # Only ready-for-review PRs whose branch is a strict vX.Y.Z --
+            # this deliberately excludes the next-series draft on
+            # kernel-config/v<series>.x, which is human-only.
+            num="$(gh pr list --state open --json number,headRefName,isDraft \
+                     --jq '.[]
+                           | select(.isDraft | not)
+                           | select(.headRefName | test("^kernel-config/v[0-9]+\\.[0-9]+\\.[0-9]+$"))
+                           | "\(.headRefName)\t\(.number)"' \
+                   | sed 's#kernel-config/v##' | sort -V | tail -1 | cut -f2)"
+          fi
+          if [ -z "${num:-}" ]; then
+            echo "No open kernel-config/v* PR to evaluate -- nothing to do."
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          branch="$(gh pr view "$num" --json headRefName --jq .headRefName)"
+          version="${branch#kernel-config/v}"
+          series="$(echo "$version" | cut -d. -f1,2)"
+          echo "PR #$num  branch=$branch  version=$version  series=$series"
+          {
+            echo "found=true"
+            echo "num=$num"
+            echo "branch=$branch"
+            echo "version=$version"
+            echo "series=$series"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Check out the PR branch
+        if: steps.pr.outputs.found == 'true'
+        env:
+          BRANCH: ${{ steps.pr.outputs.branch }}
+        run: |
+          set -euo pipefail
+          git fetch origin "+refs/heads/${BRANCH}:refs/remotes/origin/${BRANCH}"
+          git checkout -B "$BRANCH" "origin/${BRANCH}"
+
+      # Content-clean is necessary but not sufficient: a config PR must also
+      # pass its own CI (lint.yml, generate-config.yml, both pull_request-
+      # triggered) before it gets fast-forwarded and tagged.
+      - name: Check CI status on the PR
+        id: ci
+        if: steps.pr.outputs.found == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NUM: ${{ steps.pr.outputs.num }}
+        run: |
+          set -euo pipefail
+          rollup="$(gh pr view "$NUM" --json statusCheckRollup --jq '.statusCheckRollup')"
+
+          # Normalise both check-run (status/conclusion) and legacy commit-status
+          # (state) shapes to one verdict per check.
+          classified="$(echo "$rollup" | jq '
+            [.[] | {
+              name: (.name // .context),
+              verdict: (
+                if has("status") then
+                  if .status != "COMPLETED" then "pending"
+                  else ((.conclusion // "") | ascii_upcase) as $c
+                       | (if $c == "SUCCESS" or $c == "NEUTRAL" or $c == "SKIPPED"
+                          then "pass" else "fail" end)
+                  end
+                else
+                  if .state == "PENDING" then "pending"
+                  elif .state == "SUCCESS" then "pass"
+                  else "fail"
+                  end
+                end
+              )
+            }]
+          ')"
+
+          total="$(echo "$classified" | jq 'length')"
+          failed="$(echo "$classified" | jq -r '[.[] | select(.verdict == "fail") | .name] | join(", ")')"
+          pending="$(echo "$classified" | jq -r '[.[] | select(.verdict == "pending") | .name] | join(", ")')"
+
+          if [ "$total" -eq 0 ]; then
+            ok=false
+            echo "No CI checks have reported for this PR yet." > /tmp/ci-summary.md
+          elif [ -n "$failed" ]; then
+            ok=false
+            echo "Failing check(s): $failed" > /tmp/ci-summary.md
+          elif [ -n "$pending" ]; then
+            ok=false
+            echo "Still running: $pending" > /tmp/ci-summary.md
+          else
+            ok=true
+            echo "All $total CI check(s) passed." > /tmp/ci-summary.md
+          fi
+          {
+            echo "ok=$ok"
+            echo "summary_path=/tmp/ci-summary.md"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Decide whether the PR is auto-mergeable
+        id: decide
+        if: steps.pr.outputs.found == 'true'
+        env:
+          VERSION: ${{ steps.pr.outputs.version }}
+          SERIES: ${{ steps.pr.outputs.series }}
+          CI_OK: ${{ steps.ci.outputs.ok }}
+          CI_SUMMARY_PATH: ${{ steps.ci.outputs.summary_path }}
+        run: |
+          set -euo pipefail
+
+          # The lever. A changed config symbol is "explained" (fine to
+          # auto-merge over) only if its name matches this. It is meant to be
+          # exactly the toolchain identity symbols and the version-gated
+          # capability symbols that hang off them -- CONFIG_CC_*, CONFIG_GCC*,
+          # CONFIG_CLANG*, CONFIG_LD_*, CONFIG_LLD_VERSION, CONFIG_AS_*,
+          # CONFIG_PAHOLE*, CONFIG_RUST*, CONFIG_TOOLCHAIN_*. A point-release
+          # bump still moves these because the previously tracked config may
+          # have been generated on an older runner image. Widen it only
+          # deliberately.
+          allow_re='^CONFIG_(CC_|GCC|CLANG|LD_|LLD_VERSION|AS_|PAHOLE|RUST|TOOLCHAIN_)'
+
+          # Same flavor set the config PR was generated for: a
+          # flavors/<name>/.noautomation marker keeps it out of automation.
+          flavors="$(find flavors -mindepth 1 -maxdepth 1 -type d \
+                       ! -exec test -e '{}/.noautomation' ';' -printf '%f\n')"
+
+          prev="$(find configs -mindepth 1 -maxdepth 1 -type d -printf '%f\n' \
+                  | awk -F. -v s="$SERIES" '($1"."$2) == s' \
+                  | grep -vFx "$VERSION" | sort -V | tail -1 || true)"
+
+          : > /tmp/report.md
+
+          if [ -z "$prev" ]; then
+            echo "No previously tracked version in series $SERIES -- new series."
+            {
+              echo "**Not auto-merging.** \`$VERSION\` is the first tracked version"
+              echo "in the \`$SERIES\` series -- there is no \`configs/$SERIES.*\` to"
+              echo "diff against, so a human needs to review and merge this one."
+            } > /tmp/report.md
+            {
+              echo "merge=false"
+              echo "report_path=/tmp/report.md"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Diffing $VERSION against previously tracked $prev"
+          : > /tmp/unexplained.txt
+          missing=0
+          for flavor in $flavors; do
+            for kind in config config-defconfig; do
+              old="configs/${prev}/${flavor}-${kind}"
+              new="configs/${VERSION}/${flavor}-${kind}"
+              if [ ! -f "$new" ] || [ ! -f "$old" ]; then
+                echo "  $flavor/$kind: cannot compare ($old vs $new)"
+                missing=1
+                continue
+              fi
+              syms="$(diff -u "$old" "$new" \
+                      | grep -E '^[+-]' | grep -Ev '^(\+\+\+|---) ' \
+                      | grep -oE 'CONFIG_[A-Za-z0-9_]+' | sort -u || true)"
+              for s in $syms; do
+                printf '%s\n' "$s" | grep -qE "$allow_re" \
+                  || printf '%s\t%s\n' "$flavor/$kind" "$s" >> /tmp/unexplained.txt
+              done
+            done
+          done
+
+          if [ "$missing" -ne 0 ]; then
+            {
+              echo "**Not auto-merging \`$VERSION\`.** Some per-flavor config files"
+              echo "could not be compared against \`$prev\` (see the workflow log)."
+            } > /tmp/report.md
+            {
+              echo "merge=false"
+              echo "report_path=/tmp/report.md"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ -s /tmp/unexplained.txt ]; then
+            n="$(sort -u /tmp/unexplained.txt | wc -l)"
+            {
+              echo "**Not auto-merging \`$VERSION\`** (diffed against \`$prev\`)."
+              echo "$n changed config symbol(s) are not toolchain/version"
+              echo "bookkeeping and need a human review:"
+              echo
+              echo '```'
+              sort -u /tmp/unexplained.txt | sed 's/\t/  ->  /'
+              echo '```'
+            } > /tmp/report.md
+            {
+              echo "merge=false"
+              echo "report_path=/tmp/report.md"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          {
+            echo "**Auto-merging \`$VERSION\`.** Diffed against \`$prev\`: every changed"
+            echo "config symbol is toolchain/version bookkeeping (compiler / pahole /"
+            echo "rust versions and the \`CONFIG_*_HAS_*\` symbols gated on them). No"
+            echo "module or feature turned on or off, same series. Pushing tag"
+            echo "\`v$VERSION-1\` to start the release build."
+          } > /tmp/report.md
+          {
+            echo "merge=true"
+            echo "report_path=/tmp/report.md"
+          } >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Gate the merge on CI
+        id: gate
+        if: steps.pr.outputs.found == 'true'
+        env:
+          VERSION: ${{ steps.pr.outputs.version }}
+          CONTENT_MERGE: ${{ steps.decide.outputs.merge }}
+          CI_OK: ${{ steps.ci.outputs.ok }}
+          CI_SUMMARY_PATH: ${{ steps.ci.outputs.summary_path }}
+          CONTENT_REPORT: ${{ steps.decide.outputs.report_path }}
+        run: |
+          set -euo pipefail
+          if [ "$CONTENT_MERGE" = "true" ] && [ "$CI_OK" != "true" ]; then
+            {
+              echo "**Not auto-merging \`$VERSION\` yet.** The config diff is clean --"
+              echo "content-wise this is auto-mergeable -- but CI has not passed yet:"
+              echo
+              cat "$CI_SUMMARY_PATH"
+            } > /tmp/gate-report.md
+            {
+              echo "merge=false"
+              echo "report_path=/tmp/gate-report.md"
+            } >> "$GITHUB_OUTPUT"
+          else
+            {
+              echo "merge=$CONTENT_MERGE"
+              echo "report_path=$CONTENT_REPORT"
+            } >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Comment the decision on the PR
+        if: steps.pr.outputs.found == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NUM: ${{ steps.pr.outputs.num }}
+          REPORT: ${{ steps.gate.outputs.report_path }}
+        run: |
+          set -euo pipefail
+
+          # This workflow re-evaluates the PR on every upstream check run (every
+          # few hours). The decision text only changes when the configs or the
+          # tracked base version change, so key each comment by a hash of its
+          # body and skip posting when the most recent decision comment already
+          # carries the same one -- otherwise a stuck "Not auto-merging" PR
+          # collects an identical comment several times a day.
+          sig="$(sha256sum "$REPORT" | cut -c1-16)"
+          marker="<!-- auto-merge-decision: ${sig} -->"
+
+          last="$(gh pr view "$NUM" --json comments \
+                    --jq '[.comments[].body | select(contains("<!-- auto-merge-decision:"))] | last // ""')"
+          if printf '%s\n' "$last" | grep -qF "$marker"; then
+            echo "Decision unchanged since the last comment -- not posting a duplicate."
+            exit 0
+          fi
+
+          { cat "$REPORT"; echo; echo "$marker"; } | gh pr comment "$NUM" --body-file -
+
+      - name: Merge and tag
+        id: merge
+        if: steps.gate.outputs.merge == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GIT_AUTHOR_NAME: github-actions[bot]
+          GIT_AUTHOR_EMAIL: github-actions[bot]@users.noreply.github.com
+          GIT_COMMITTER_NAME: github-actions[bot]
+          GIT_COMMITTER_EMAIL: github-actions[bot]@users.noreply.github.com
+          NUM: ${{ steps.pr.outputs.num }}
+          VERSION: ${{ steps.pr.outputs.version }}
+        run: |
+          set -euo pipefail
+          tag="v${VERSION}-1"
+
+          if git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null 2>&1; then
+            echo "error: tag $tag already exists on origin -- refusing to re-tag." >&2
+            echo "       Merge the PR by hand and choose the build iteration number." >&2
+            exit 1
+          fi
+
+          gh pr merge "$NUM" --rebase --delete-branch
+
+          # Land on the just-merged commit before tagging it.
+          git checkout main
+          git fetch origin main
+          git reset --hard origin/main
+
+          git tag -a "$tag" -m "Release $tag"
+          git push origin "refs/tags/${tag}"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+  release:
+    name: Build and release
+    needs: evaluate
+    if: needs.evaluate.outputs.merge == 'true'
+    permissions:
+      contents: write
+    uses: ./.github/workflows/_release.yml
+    with:
+      tag: ${{ needs.evaluate.outputs.tag }}
