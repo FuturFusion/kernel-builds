@@ -9,7 +9,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.dirname(os.path.abspath(__file__)))))
 
 from genconfig import (
-    enable_by_prefix,
     enable_exact,
     enable_umbrella,
     finish,
@@ -17,23 +16,7 @@ from genconfig import (
     start,
 )
 
-kconf = start()
-
-enable_exact(("STAGING", 2))
-
-#
-# Enable all RAID and LVM device drivers as modules
-#
-enable_umbrella("MD", 2, label="MD")
-
-#
-# Enable all SCSI/RAID/SAS/FC HBA drivers as modules
-#
-scsi = kconf.syms["SCSI"]
-if scsi.tri_value == 0:          # SCSI_LOWLEVEL requires "SCSI!=n"
-    scsi.set_value(2)            # y
-
-enable_umbrella("SCSI_LOWLEVEL", 2, label="SCSI_LOWLEVEL")  # a gate, not a driver itself
+kconf = start(defconfig="kernel/configs/kvm_guest.config")
 
 if "EXPERT" in kconf.syms:
     kconf.syms["EXPERT"].set_value(2)  # y
@@ -80,63 +63,6 @@ enable_umbrella("IP_NF_ARPTABLES", 1, label="IP_NF_ARPTABLES")
 enable_exact(("BRIDGE_NETFILTER", 1), ("NF_CT_NETLINK_HELPER", 1),
              ("NETFILTER_NETLINK_GLUE_CT", 2), ("NETFILTER_XT_MATCH_PHYSDEV", 1),
              ("NF_LOG_ARP", 1), ("NF_LOG_IPV4", 1), ("NF_CONNTRACK_BRIDGE", 1))
-
-# --- MPTCP (Multipath TCP) -- never touched.
-enable_umbrella("MPTCP", 2, label="MPTCP")
-enable_exact(("INET_MPTCP_DIAG", 1), ("MPTCP_IPV6", 2))
-
-# --- IP_SCTP -- whole protocol never enabled before.
-enable_umbrella("IP_SCTP", 1, label="IP_SCTP")
-enable_exact(("INET_SCTP_DIAG", 1), ("SCTP_DBG_OBJCNT", 0))  # DBG doesn't
-# match the "DEBUG" deny-list pattern, so explicit insurance is needed.
-
-# --- CRYPTO: confirmed via diagnostics that the actual crypto/Kconfig
-#     core (cipher algorithms, DRBG/RNG, JITTERENTROPY, CRYPTO_LIB_*) was
-#     never touched at all -- we'd only ever swept CRYPTO_DEV_ (hardware
-#     accelerators) much earlier. Broad "CRYPTO" prefix (no trailing
-#     underscore) catches everything in one sweep -- CRYPTO_DEV_* and the
-#     CRYPTO_LIB_* symbols over in lib/crypto/Kconfig included -- so the
-#     separate CRYPTO_DEV_/CRYPTO_LIB_ sweeps that used to sit here and
-#     further up are gone; measured redundant, diff unchanged.
-enable_by_prefix("CRYPTO")
-
-# --- CRYPTO: the core software crypto API (crypto/Kconfig) -- a proper
-#     menuconfig umbrella. The same sweep also covers drivers/crypto/'s
-#     CRYPTO_DEV_* hardware accelerators and lib/crypto's CRYPTO_LIB_*,
-#     since both start with "CRYPTO". Explains
-#     CRYPTO_BLOWFISH_COMMON, CRYPTO_CAST_COMMON, CRYPTO_DRBG_MENU (and
-#     its nested children CTR/HASH/HMAC), CRYPTO_FCRYPT, CRYPTO_PCBC, etc.
-enable_umbrella("CRYPTO", 1, label="CRYPTO")
-
-# Virtualization guest/host driver menus -- all three are menuconfig gates
-# (VIRTIO_MENU/VHOST_MENU default y, VDPA is tristate) whose child driver
-# families zabbly enables essentially wholesale. VDPA's vendor drivers
-# (MLX5_VDPA_NET, IFCVF, ...) need their parent NIC cores, already on via the
-# ETHERNET walk far above. VIRTIO_MENU has two children zabbly leaves off
-# (VIRTIO_HARDEN_NOTIFICATION hardening toggle, VIRTIO_RTC_ARM arch-specific);
-# they can't be pattern-denied, so they are suppressed as data in
-# config_slices/virtualization.config instead.
-enable_umbrella("VHOST_MENU", 2, label="VHOST_MENU")   # vhost host-side accel: VHOST_NET/SCSI/VSOCK/VDPA
-enable_umbrella("VIRTIO_MENU", 2, label="VIRTIO_MENU") # virtio guest drivers: PCI/MMIO/BALLOON/MEM/INPUT/RTC/...
-
-# Hyper-V guest support (validation-only parity; pointless on a KVM host, same
-# stance as XEN). HYPERV is a plain bool gate whose driver zoo is scattered by
-# `depends on HYPERV_VMBUS` across drivers/hv, net/hyperv, scsi, hid, pci, drm,
-# uio -- NOT a menu subtree, so a subtree walk can't reach them. Enable the gate
-# + sweep the HYPERV_* core family here, EARLY, so HYPERV_VMBUS is already on
-# when the UIO/HID/DRM/PCI walks below run and pick up the cross-subsystem
-# drivers (UIO_HV_GENERIC/HID_HYPERV_MOUSE/DRM_HYPERV/PCI_HYPERV). VTL_MODE and
-# the stray PCI_HYPERV/MSHV bits are handled as data in virtualization.config.
-enable_exact(("HYPERV", 2))                            # bool gate (set without walking -> avoids VTL_MODE)
-enable_by_prefix("HYPERV_")                            # VMBUS + net/storage/utils/balloon/vsock/kbd/iommu/timer
-
-enable_umbrella("KGDB", 2, label="KGDB")               # KGDB/KDB debugger: serial-console/kdb/keyboard/blocklist (KGDB_TESTS denied)
-enable_umbrella("VIRT_DRIVERS", 2, label="VIRT_DRIVERS")  # virt guest drivers: VMGENID/VBOXGUEST/NITRO/SEV_GUEST/TDX_GUEST_DRIVER (ARM/FSL cap); also cascades the TSM_* selects
-
-enable_umbrella("EVM", 2, label="EVM")                 # Extended Verification Module (integrity xattr protection)
-enable_by_prefix("EVM_")                               # ATTR_FSUUID/ADD_XATTRS/EXTRA_SMACK_XATTRS are `depends on EVM` siblings
-enable_exact(("HARDLOCKUP_DETECTOR", 2))               # NMI hard-lockup detector; the _PERF/_COUNTS_HRTIMER/_ARCH/_BUDDY sub-symbols are promptless and resolve themselves
-enable_umbrella("FW_CFG_SYSFS", 1, label="FW_CFG_SYSFS")  # QEMU fw_cfg sysfs interface
 
 # --- net/netfilter/Kconfig: the x_tables match/target module zoo itself.
 #     We flipped NETFILTER_XTABLES_LEGACY on for byte-parity earlier, but
@@ -213,17 +139,7 @@ load_slices(
     "tracing",
     "networking",
     "secure_boot",
-    "crypto",
     "misc",
 )
-
-# VIRTIO_VFIO_PCI (variant VFIO PCI driver for virtio devices) + its
-# VIRTIO_VFIO_PCI_ADMIN_LEGACY child. Placed here, AFTER the config_slices
-# load, because it depends on VFIO -- which virtualization.config only turns
-# on a few lines above; running it up in the driver-family block would find
-# VFIO still off and get silently capped.
-enable_umbrella("VIRTIO_VFIO_PCI", 1, label="VIRTIO_VFIO_PCI")
-
-kconf.load_config("kernel/configs/kvm_guest.config", replace=False)
 
 finish()

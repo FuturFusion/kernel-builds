@@ -15,11 +15,13 @@ permissions:
   contents: read
 
 jobs:
-  discover-series:
-    name: Discover kernel series
+  discover:
+    name: Discover series and flavors
     runs-on: ubuntu-latest
     outputs:
-      series: ${{ steps.list.outputs.series }}
+      series: ${{ steps.series.outputs.series }}
+      flavors: ${{ steps.flavors.outputs.flavors }}
+      latest_version: ${{ steps.latest.outputs.version }}
 
     steps:
       - name: Check out
@@ -27,13 +29,8 @@ jobs:
         with:
           persist-credentials: false
 
-      # Every kernel series we test against is just a directory under misc/
-      # holding its own zabbly-config -- misc/6.19/, misc/7.0/, misc/7.1/, ...
-      # Discovering them here (rather than hardcoding a list in the matrix)
-      # means a new misc/<series>/ is enough to add a series to CI; nothing
-      # in this workflow needs editing.
       - name: List series with a reference config
-        id: list
+        id: series
         run: |
           set -euo pipefail
           series=$(for d in misc/*/; do
@@ -47,20 +44,44 @@ jobs:
           echo "Series found: $series"
           echo "series=$series" >> "$GITHUB_OUTPUT"
 
-  generate:
-    name: ${{ matrix.flavor }} / ${{ matrix.series }}
-    needs: discover-series
+      - name: List every flavor
+        id: flavors
+        run: |
+          set -euo pipefail
+          flavors=$(find flavors -mindepth 1 -maxdepth 1 -type d -printf '%f\n' \
+                    | sort | jq -R -s -c 'split("\n")[:-1]')
+          if [ "$flavors" = "[]" ]; then
+            echo "error: no flavors found under flavors/" >&2
+            exit 1
+          fi
+          echo "Flavors found: $flavors"
+          echo "flavors=$flavors" >> "$GITHUB_OUTPUT"
+
+      - name: Find the newest tracked config version
+        id: latest
+        run: |
+          set -euo pipefail
+          version=$(find configs -mindepth 1 -maxdepth 1 -type d -printf '%f\n' \
+                    | sort -V | tail -1)
+          if [ -z "$version" ]; then
+            echo "error: no configs/<version>/ directories found" >&2
+            exit 1
+          fi
+          echo "Newest tracked config version: $version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  reference-diff:
+    name: generic vs misc/${{ matrix.series }}
+    needs: discover
     runs-on: ubuntu-latest
 
     strategy:
-      # One (flavor, series) combination failing should not hide the others.
       fail-fast: false
       matrix:
-        flavor: [generic, server]
-        series: ${{ fromJson(needs.discover-series.outputs.series) }}
+        series: ${{ fromJson(needs.discover.outputs.series) }}
 
     env:
-      FLAVOR: ${{ matrix.flavor }}
+      FLAVOR: generic
       SERIES: ${{ matrix.series }}
 
     steps:
@@ -70,17 +91,6 @@ jobs:
           submodules: recursive
           persist-credentials: false
 
-      - name: Install kernel build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential flex bison bc libelf-dev libssl-dev dwarves python3
-
-      # misc/<series>/zabbly-config states the exact kernel it was built for
-      # in its header ("# Linux/x86 <version> Kernel Configuration"), so the
-      # tarball to download comes from there rather than being guessed from
-      # the series name alone -- misc/6.19/ doesn't by itself say whether
-      # that means 6.19.0 or 6.19.4.
       - name: Determine kernel version
         id: kver
         run: |
@@ -92,70 +102,17 @@ jobs:
             exit 1
           fi
           echo "Configuring $SERIES against Linux $version"
-          echo "version=$version"     >> "$GITHUB_OUTPUT"
-          echo "major=${version%%.*}" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
-      # Cache the extracted source tree: it is a few hundred MB of pure
-      # download+unpack that never changes for a given released version, so the
-      # key needs no hash beyond the version itself.
-      - name: Cache kernel source tree
-        id: kernel-cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - name: Set up the kernel source tree
+        uses: ./.github/actions/setup-kernel-tree
         with:
-          path: ~/kernel/linux-${{ steps.kver.outputs.version }}
-          key: linux-src-${{ steps.kver.outputs.version }}
-
-      - name: Download kernel source tree
-        if: steps.kernel-cache.outputs.cache-hit != 'true'
-        env:
-          KVER_VERSION: ${{ steps.kver.outputs.version }}
-          KVER_MAJOR: ${{ steps.kver.outputs.major }}
-        run: |
-          set -euo pipefail
-          v="$KVER_VERSION"
-          url="https://cdn.kernel.org/pub/linux/kernel/v${KVER_MAJOR}.x/linux-${v}.tar.xz"
-          mkdir -p ~/kernel
-          echo "Fetching $url"
-          curl -fSL --retry 3 "$url" | tar -xJ -C ~/kernel
-          test -f ~/kernel/linux-"$v"/Makefile
-
-      # Same step a human does per the README: copy the template, point it at
-      # this machine's paths. Note there's no REFERENCE_CONFIG to set here --
-      # genconfig.sh works that out itself from KERNEL_TREE_PATH's own
-      # reported version, same as a local run gets.
-      - name: Create .env
-        env:
-          KVER_VERSION: ${{ steps.kver.outputs.version }}
-        run: |
-          set -euo pipefail
-          sed -e "s|^KERNEL_TREE_PATH=.*|KERNEL_TREE_PATH=$HOME/kernel/linux-${KVER_VERSION}|" \
-              -e "s|^KERNEL_TREE_BUILD_PATH=.*|KERNEL_TREE_BUILD_PATH=$RUNNER_TEMP/kernel-build|" \
-              .env.example > .env
-          cat .env
+          version: ${{ steps.kver.outputs.version }}
 
       - name: Check config_slices are disjoint
         run: ./check_slices.py "$FLAVOR"
 
-      # genconfig.sh gives every flavor but generic a suffixed output name, so
-      # that they cannot clobber each other. Mirror that rule here.
-      - name: Resolve the generated config path
-        run: |
-          set -euo pipefail
-          if [ "$FLAVOR" = "generic" ]; then
-            echo "CONFIG_FILE=generated_config" >> "$GITHUB_ENV"
-          else
-            echo "CONFIG_FILE=generated_config-$FLAVOR" >> "$GITHUB_ENV"
-          fi
-
-      # The flag is passed explicitly rather than left to .env.example, so CI
-      # behaviour cannot change as a side effect of editing that template. The
-      # runner does have the build dependencies, so normalization is a
-      # workflow_dispatch option rather than something that cannot run here.
-      # Which misc/<series>/zabbly-config gets compared against is no longer
-      # this workflow's concern at all -- genconfig.sh derives it from the
-      # kernel tree we just downloaded, and the "Determine kernel version"
-      # step above guarantees that tree matches $SERIES.
-      - name: Generate the config
+      - name: Generate and validate the config
         env:
           NORMALIZE: ${{ inputs.normalize }}
         run: |
@@ -178,24 +135,13 @@ jobs:
           echo "::notice::output/${FLAVOR}/diff ($SERIES) is $lines line(s)"
 
           {
-            echo "## $FLAVOR / $SERIES: diff vs misc/$SERIES/zabbly-config ($lines lines)"
+            echo "## generic / $SERIES: diff vs misc/$SERIES/zabbly-config ($lines lines)"
             echo
             echo 'Left column is the reference config, right column is our generated config.'
-            echo
-            if [ "$FLAVOR" = "generic" ]; then
-              echo 'The generic flavor aims to reproduce the reference exactly, so'
-              echo 'every line here is something to explain.'
-            else
-              echo "The $FLAVOR flavor deliberately differs from a general-purpose"
-              echo 'distro kernel, so this diff is the list of what it drops or'
-              echo 'changes -- a large one is the point, not a defect.'
-            fi
-            echo
-            echo 'Either way, some divergence is environmental rather than ours:'
-            echo 'the reference config was built with a different compiler, so'
+            echo 'generic aims to reproduce the reference exactly, so every line here'
+            echo 'is something to explain -- except compiler-driven divergence'
             # shellcheck disable=SC2016  # literal markdown backticks, not meant to expand
-            echo '`CC_VERSION_TEXT` and any gcc-version-gated symbols will differ'
-            echo 'from what this runner produces.'
+            echo '(`CC_VERSION_TEXT` and gcc-version-gated symbols), which is expected.'
             echo
             echo '```diff'
             cat "output/${FLAVOR}/diff"
@@ -206,25 +152,19 @@ jobs:
           cat "output/${FLAVOR}/diff"
           echo "-----------------------"
 
-      # Informational only. kernel-hardening-checker exits 0 whatever the
-      # verdicts are and non-zero only when it cannot run, so simply not
-      # swallowing its status gives exactly the behaviour we want: FAIL lines
-      # are reported, a broken tool breaks the build.
       - name: Check config hardening
         run: |
           set -euo pipefail
-          ./check-config-hardening.sh "$CONFIG_FILE" | tee "output/$FLAVOR/hardening.txt"
+          ./check-config-hardening.sh generated_config | tee "output/$FLAVOR/hardening.txt"
 
           echo "::notice::$(grep -F '[+] Check is finished:' "output/${FLAVOR}/hardening.txt" \
                             || echo 'hardening check finished')"
 
           {
-            echo "## $FLAVOR / $SERIES: hardening check"
+            echo "## generic / $SERIES: hardening check"
             echo
-            echo 'Reported, not enforced: these flavors target general-purpose'
-            echo 'distro kernels, which are nowhere near hardened ones, so FAIL'
-            echo 'lines here are expected. This step fails only if'
-            echo 'kernel-hardening-checker itself errors out.'
+            echo 'Reported, not enforced -- these flavors target distro kernels, so'
+            echo 'FAIL lines are expected. Fails only if the checker itself errors.'
             echo
             echo '<details><summary>Full report</summary>'
             echo
@@ -239,7 +179,88 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: ${{ matrix.flavor }}-${{ matrix.series }}-config
+          name: generic-${{ matrix.series }}-config
+          path: |
+            generated_config
+            output/generic/
+          if-no-files-found: warn
+
+  all-flavors:
+    name: ${{ matrix.flavor }} @ ${{ needs.discover.outputs.latest_version }}
+    needs: discover
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        flavor: ${{ fromJson(needs.discover.outputs.flavors) }}
+
+    env:
+      FLAVOR: ${{ matrix.flavor }}
+      VERSION: ${{ needs.discover.outputs.latest_version }}
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Set up the kernel source tree
+        uses: ./.github/actions/setup-kernel-tree
+        with:
+          version: ${{ needs.discover.outputs.latest_version }}
+
+      - name: Check config_slices are disjoint
+        run: ./check_slices.py "$FLAVOR"
+
+      - name: Resolve the generated config path
+        run: |
+          set -euo pipefail
+          if [ "$FLAVOR" = "generic" ]; then
+            echo "CONFIG_FILE=generated_config" >> "$GITHUB_ENV"
+          else
+            echo "CONFIG_FILE=generated_config-$FLAVOR" >> "$GITHUB_ENV"
+          fi
+
+      - name: Generate the config
+        env:
+          NORMALIZE: ${{ inputs.normalize }}
+        run: |
+          if [ "$NORMALIZE" = "true" ] || [ -z "$NORMALIZE" ]; then
+            ./genconfig.sh "$FLAVOR" --normalize --no-validate
+          else
+            ./genconfig.sh "$FLAVOR" --no-normalize --no-validate
+          fi
+
+      - name: Check config hardening
+        run: |
+          set -euo pipefail
+          ./check-config-hardening.sh "$CONFIG_FILE" | tee "output/$FLAVOR/hardening.txt"
+
+          echo "::notice::$(grep -F '[+] Check is finished:' "output/${FLAVOR}/hardening.txt" \
+                            || echo 'hardening check finished')"
+
+          {
+            echo "## $FLAVOR @ $VERSION: hardening check"
+            echo
+            echo 'Reported, not enforced -- these flavors target distro kernels, so'
+            echo 'FAIL lines are expected. Fails only if the checker itself errors.'
+            echo
+            echo '<details><summary>Full report</summary>'
+            echo
+            echo '```'
+            cat "output/${FLAVOR}/hardening.txt"
+            echo '```'
+            echo
+            echo '</details>'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload generated config and analysis
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ matrix.flavor }}-${{ needs.discover.outputs.latest_version }}-config
           path: |
             ${{ env.CONFIG_FILE }}
             output/${{ matrix.flavor }}/
