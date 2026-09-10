@@ -255,30 +255,33 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           FLAVORS: ${{ steps.gen.outputs.flavors }}
+          ARCHES: ${{ steps.gen.outputs.arches }}
           BASE: ${{ steps.gen.outputs.diff-base }}
           PR_URL: ${{ steps.pr.outputs.url }}
         run: |
           set -euo pipefail
           for flavor in $FLAVORS; do
-            {
-              echo "### $flavor: Linux $VERSION diff vs $BASE"
-              echo
-              echo "<details><summary>Full config diff</summary>"
-              echo
-              echo '```diff'
-              cat "${RUNNER_TEMP}/diffs/${flavor}.config.diff"
-              echo '```'
-              echo
-              echo "</details>"
-              echo
-              echo "<details><summary>Minimal (defconfig) diff</summary>"
-              echo
-              echo '```diff'
-              cat "${RUNNER_TEMP}/diffs/${flavor}.config-defconfig.diff"
-              echo '```'
-              echo
-              echo "</details>"
-            } | gh pr comment "$PR_URL" --body-file -
+            for arch in $ARCHES; do
+              {
+                echo "### $flavor / $arch: Linux $VERSION diff vs $BASE"
+                echo
+                echo "<details><summary>Full config diff</summary>"
+                echo
+                echo '```diff'
+                cat "${RUNNER_TEMP}/diffs/${flavor}.${arch}.config.diff"
+                echo '```'
+                echo
+                echo "</details>"
+                echo
+                echo "<details><summary>Minimal (defconfig) diff</summary>"
+                echo
+                echo '```diff'
+                cat "${RUNNER_TEMP}/diffs/${flavor}.${arch}.config-defconfig.diff"
+                echo '```'
+                echo
+                echo "</details>"
+              } | gh pr comment "$PR_URL" --body-file -
+            done
           done
 
   next-series:
@@ -374,27 +377,30 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           FLAVORS: ${{ steps.gen.outputs.flavors }}
+          ARCHES: ${{ steps.gen.outputs.arches }}
           PR_URL: ${{ steps.pr.outputs.url }}
         run: |
           set -euo pipefail
           for flavor in $FLAVORS; do
-            {
-              echo "### $flavor: Linux $VERSION diff vs $BASE (next series)"
-              echo
-              echo "<details><summary>Full config diff</summary>"
-              echo
-              echo '```diff'
-              cat "${RUNNER_TEMP}/diffs/${flavor}.config.diff"
-              echo '```'
-              echo
-              echo "</details>"
-              echo
-              echo "<details><summary>Minimal (defconfig) diff</summary>"
-              echo
-              echo '```diff'
-              cat "${RUNNER_TEMP}/diffs/${flavor}.config-defconfig.diff"
-              echo '```'
-              echo
-              echo "</details>"
-            } | gh pr comment "$PR_URL" --body-file -
+            for arch in $ARCHES; do
+              {
+                echo "### $flavor / $arch: Linux $VERSION diff vs $BASE (next series)"
+                echo
+                echo "<details><summary>Full config diff</summary>"
+                echo
+                echo '```diff'
+                cat "${RUNNER_TEMP}/diffs/${flavor}.${arch}.config.diff"
+                echo '```'
+                echo
+                echo "</details>"
+                echo
+                echo "<details><summary>Minimal (defconfig) diff</summary>"
+                echo
+                echo '```diff'
+                cat "${RUNNER_TEMP}/diffs/${flavor}.${arch}.config-defconfig.diff"
+                echo '```'
+                echo
+                echo "</details>"
+              } | gh pr comment "$PR_URL" --body-file -
+            done
           done

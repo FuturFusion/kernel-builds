@@ -36,6 +36,7 @@ jobs:
       kernel_version: ${{ steps.parse.outputs.kernel_version }}
       package_version: ${{ steps.parse.outputs.package_version }}
       flavors: ${{ steps.flavors.outputs.list }}
+      arches: ${{ steps.arches.outputs.list }}
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -78,24 +79,38 @@ jobs:
           echo "Flavors: $flavors"
           echo "list=$flavors" >> "$GITHUB_OUTPUT"
 
+      # Only arches with a self-hosted builder go here -- unlike ./arches
+      # (amd64 + arm64), which is what the config pipeline generates for.
+      # Keep in sync with _build-kernel.yml's runs-on.
+      - name: Determine arches
+        id: arches
+        run: |
+          set -euo pipefail
+          arches='["amd64"]'
+          echo "Arches: $arches"
+          echo "list=$arches" >> "$GITHUB_OUTPUT"
+
       # Fail fast, here on a plain ubuntu-latest runner, rather than after the
       # self-hosted build job has already installed dependencies and cloned
       # the multi-GB stable tree for every flavor -- release builds always
       # reuse an already-committed config (see _build-kernel.yml), so a
       # missing one is a release-blocking problem, not a build-time one.
-      - name: Check that a committed config exists for every flavor
+      - name: Check that a committed config exists for every flavor and arch
         env:
           KERNEL_VERSION: ${{ steps.parse.outputs.kernel_version }}
           FLAVORS: ${{ steps.flavors.outputs.list }}
+          ARCHES: ${{ steps.arches.outputs.list }}
         run: |
           set -euo pipefail
           missing=0
           for flavor in $(jq -r '.[]' <<< "$FLAVORS"); do
-            config_file="configs/${KERNEL_VERSION}/${flavor}-config"
-            if [ ! -f "$config_file" ]; then
-              echo "error: no committed config at $config_file for kernel version '$KERNEL_VERSION', flavor '$flavor'." >&2
-              missing=1
-            fi
+            for arch in $(jq -r '.[]' <<< "$ARCHES"); do
+              config_file="configs/${KERNEL_VERSION}/${flavor}-${arch}-config"
+              if [ ! -f "$config_file" ]; then
+                echo "error: no committed config at $config_file for kernel version '$KERNEL_VERSION', flavor '$flavor', arch '$arch'." >&2
+                missing=1
+              fi
+            done
           done
           if [ "$missing" -ne 0 ]; then
             echo "       Either wait for/merge the PR check-new-stable-release.yml opens for this version," >&2
@@ -105,16 +120,18 @@ jobs:
           echo "Config present for every flavor of Linux $KERNEL_VERSION."
 
   build:
-    name: Build ${{ matrix.flavor }}
+    name: Build ${{ matrix.flavor }}/${{ matrix.arch }}
     needs: parse-tag
     strategy:
       fail-fast: false
       matrix:
         flavor: ${{ fromJson(needs.parse-tag.outputs.flavors) }}
+        arch: ${{ fromJson(needs.parse-tag.outputs.arches) }}
     uses: ./.github/workflows/_build-kernel.yml
     with:
       kernel_version: ${{ needs.parse-tag.outputs.kernel_version }}
       flavor: ${{ matrix.flavor }}
+      arch: ${{ matrix.arch }}
       # Always use the already-reviewed, already-merged config from configs/
       # -- a release build never regenerates it from scratch.
       generate_config: false

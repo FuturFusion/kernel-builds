@@ -173,10 +173,10 @@ jobs:
           # deliberately.
           allow_re='^CONFIG_(CC_|GCC|CLANG|LD_|LLD_VERSION|AS_|PAHOLE|RUST|TOOLCHAIN_)'
 
-          # Same flavor set the config PR was generated for: a
-          # flavors/<name>/.noautomation marker keeps it out of automation.
+          # Same flavors/arches the config PR was generated for.
           flavors="$(find flavors -mindepth 1 -maxdepth 1 -type d \
                        ! -exec test -e '{}/.noautomation' ';' -printf '%f\n')"
+          arches="$(tr '\n' ' ' < arches)"
 
           prev="$(find configs -mindepth 1 -maxdepth 1 -type d -printf '%f\n' \
                   | awk -F. -v s="$SERIES" '($1"."$2) == s' \
@@ -202,20 +202,22 @@ jobs:
           : > /tmp/unexplained.txt
           missing=0
           for flavor in $flavors; do
-            for kind in config config-defconfig; do
-              old="configs/${prev}/${flavor}-${kind}"
-              new="configs/${VERSION}/${flavor}-${kind}"
-              if [ ! -f "$new" ] || [ ! -f "$old" ]; then
-                echo "  $flavor/$kind: cannot compare ($old vs $new)"
-                missing=1
-                continue
-              fi
-              syms="$(diff -u "$old" "$new" \
-                      | grep -E '^[+-]' | grep -Ev '^(\+\+\+|---) ' \
-                      | grep -oE 'CONFIG_[A-Za-z0-9_]+' | sort -u || true)"
-              for s in $syms; do
-                printf '%s\n' "$s" | grep -qE "$allow_re" \
-                  || printf '%s\t%s\n' "$flavor/$kind" "$s" >> /tmp/unexplained.txt
+            for arch in $arches; do
+              for kind in config config-defconfig; do
+                old="configs/${prev}/${flavor}-${arch}-${kind}"
+                new="configs/${VERSION}/${flavor}-${arch}-${kind}"
+                if [ ! -f "$new" ] || [ ! -f "$old" ]; then
+                  echo "  $flavor/$arch/$kind: cannot compare ($old vs $new)"
+                  missing=1
+                  continue
+                fi
+                syms="$(diff -u "$old" "$new" \
+                        | grep -E '^[+-]' | grep -Ev '^(\+\+\+|---) ' \
+                        | grep -oE 'CONFIG_[A-Za-z0-9_]+' | sort -u || true)"
+                for s in $syms; do
+                  printf '%s\n' "$s" | grep -qE "$allow_re" \
+                    || printf '%s\t%s\n' "$flavor/$arch/$kind" "$s" >> /tmp/unexplained.txt
+                done
               done
             done
           done

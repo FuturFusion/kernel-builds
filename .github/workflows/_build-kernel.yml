@@ -16,6 +16,11 @@ on:
         description: "Which flavor to build the .deb for."
         required: true
         type: string
+      arch:
+        description: "Target architecture (a line of ./arches, e.g. amd64 or arm64)."
+        required: false
+        type: string
+        default: amd64
       generate_config:
         description: >
           Run genconfig.sh to generate a fresh config instead of using the
@@ -31,10 +36,11 @@ on:
         default: false
       validate:
         description: >
-          Also compare the generated config against misc/<series>/zabbly-config
-          for this kernel's series, purely informational (shown in the job
-          summary). Only has an effect when generate_config is also on --
-          there's nothing to validate when reusing an already-committed config.
+          Also compare the generated config against
+          misc/<series>/reference-<arch>-config for this kernel's series,
+          purely informational (shown in the job summary). Only has an effect
+          when generate_config is also on -- there's nothing to validate when
+          reusing an already-committed config.
         required: false
         type: boolean
         default: false
@@ -65,13 +71,10 @@ jobs:
       matrix:
         os:
           - debian-13
-        arch:
-          - amd64
-          #- arm64
     runs-on:
       - self-hosted
       - futurfusion-kernel-build
-      - arch-${{ matrix.arch }}
+      - arch-${{ inputs.arch }}
       - image-${{ matrix.os }}
 
     outputs:
@@ -79,6 +82,7 @@ jobs:
 
     env:
       FLAVOR: ${{ inputs.flavor }}
+      PKGARCH: ${{ inputs.arch }}
       KERNEL_VERSION: ${{ inputs.kernel_version }}
       VALIDATE: ${{ inputs.validate }}
       PACKAGE_VERSION: ${{ inputs.package_version }}
@@ -102,8 +106,9 @@ jobs:
         if: inputs.generate_config && inputs.validate
         run: |
           set -euo pipefail
-          if [ ! -f "misc/${series}/zabbly-config" ]; then
-            echo "error: no misc/${series}/zabbly-config for kernel version '$KERNEL_VERSION' (series '$series')" >&2
+          ref="misc/${series}/reference-${PKGARCH}-config"
+          if [ ! -f "$ref" ]; then
+            echo "error: no $PKGARCH reference config ($ref) for kernel version '$KERNEL_VERSION' (series '$series')" >&2
             # shellcheck disable=SC2012  # a friendly listing in an error message, not parsing-critical
             echo "       available series: $(ls misc | tr '\n' ' ')" >&2
             echo "       or turn off 'validate' to build without comparing against a reference" >&2
@@ -193,20 +198,19 @@ jobs:
       - name: Generate kernel config
         if: inputs.generate_config
         run: |
+          set -euo pipefail
           ./check_slices.py "$FLAVOR"
 
           if [ "$VALIDATE" = "true" ]; then
-            ./genconfig.sh "$FLAVOR" --normalize --validate
+            ./genconfig.sh "$PKGARCH" "$FLAVOR" --normalize --validate
           else
-            ./genconfig.sh "$FLAVOR" --normalize --no-validate
+            ./genconfig.sh "$PKGARCH" "$FLAVOR" --normalize --no-validate
           fi
 
           source .env
 
-          if [ "$FLAVOR" != "generic" ]; then
-            GENERATED_CONFIG_PATH="${GENERATED_CONFIG_PATH}-${FLAVOR}"
-          fi
-          cp "$GENERATED_CONFIG_PATH" "${KERNEL_TREE_BUILD_PATH}/.config"
+          cfg="${GENERATED_CONFIG_PATH}-${FLAVOR}-${PKGARCH}"
+          cp "$cfg" "${KERNEL_TREE_BUILD_PATH}/.config"
 
       # The normal flow: check-new-stable-release.yml already generated and
       # PR'd this config, a human already reviewed/merged it, so a release
@@ -220,9 +224,9 @@ jobs:
           set -euo pipefail
           source .env
 
-          config_file="configs/${KERNEL_VERSION}/${FLAVOR}-config"
+          config_file="configs/${KERNEL_VERSION}/${FLAVOR}-${PKGARCH}-config"
           if [ ! -f "$config_file" ]; then
-            echo "error: no committed config at $config_file for kernel version '$KERNEL_VERSION', flavor '$FLAVOR'." >&2
+            echo "error: no committed config at $config_file for kernel version '$KERNEL_VERSION', flavor '$FLAVOR', arch '$PKGARCH'." >&2
             echo "       Either wait for/merge the PR check-new-stable-release.yml opens for this version," >&2
             echo "       or re-run with 'generate config' enabled to generate one now." >&2
             exit 1
@@ -237,7 +241,6 @@ jobs:
       # kernel-release-visible build identifier.
       - name: Generate version string
         env:
-          PKGARCH: "${{ matrix.arch }}"
           PKGOS: "${{ matrix.os }}"
         run: |
           source .env
@@ -282,7 +285,6 @@ jobs:
       - name: Prepare the artifacts
         env:
           PKGOS: "${{ matrix.os }}"
-          PKGARCH: "${{ matrix.arch }}"
         run: |
           set -euo pipefail
           source .env
@@ -312,7 +314,6 @@ jobs:
         id: artifact
         env:
           PKGOS: "${{ matrix.os }}"
-          PKGARCH: "${{ matrix.arch }}"
         run: |
           echo "name=${PKGOS}-${PKGARCH}-${FLAVOR}" >> "$GITHUB_OUTPUT"
 

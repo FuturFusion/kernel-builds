@@ -1,10 +1,11 @@
 name: Generate flavor configs
 description: >
   Download and cryptographically verify a kernel source tree, generate
-  configs/<version>/ for every automated flavor (those without a
-  flavors/<name>/.noautomation marker), and compute per-flavor unified diffs
-  against a base version already tracked under configs/. The diffs are left
-  in ${RUNNER_TEMP}/diffs/<flavor>.<kind>.diff for the caller to post.
+  configs/<version>/<flavor>-<arch>-config for every automated flavor (those
+  without a flavors/<name>/.noautomation marker) and every arch in ./arches,
+  and compute per-(flavor, arch) unified diffs against a base version already
+  tracked under configs/. The diffs are left in
+  ${RUNNER_TEMP}/diffs/<flavor>.<arch>.<kind>.diff for the caller to post.
 
   Assumes the repository is already checked out (with submodules) in the
   current working directory.
@@ -24,7 +25,10 @@ inputs:
 outputs:
   flavors:
     description: "Space-separated list of flavors that were generated."
-    value: ${{ steps.flavors.outputs.list }}
+    value: ${{ steps.matrix.outputs.flavors }}
+  arches:
+    description: "Space-separated list of arches that were generated."
+    value: ${{ steps.matrix.outputs.arches }}
   diff-base:
     description: "The version actually diffed against (empty if there was none)."
     value: ${{ steps.diffs.outputs.base }}
@@ -70,41 +74,44 @@ runs:
             -e "s|^KERNEL_TREE_BUILD_PATH=.*|KERNEL_TREE_BUILD_PATH=${RUNNER_TEMP}/kernel-build|" \
             .env.example > .env
 
-    # A flavor with a flavors/<name>/.noautomation marker is deliberately left
-    # out of everything automated. `./genconfig.sh <name>` still works by hand.
-    - name: Determine flavors
-      id: flavors
+    # Flavors: every flavors/<name>/ without a .noautomation marker (that marker
+    # keeps a flavor out of everything automated; `./genconfig.sh <arch> <name>`
+    # still works by hand). Arches: the lines of ./arches.
+    - name: Determine flavors and arches
+      id: matrix
       shell: bash
       run: |
         set -euo pipefail
         flavors="$(find flavors -mindepth 1 -maxdepth 1 -type d \
                      ! -exec test -e '{}/.noautomation' ';' -printf '%f ')"
+        arches="$(tr '\n' ' ' < arches)"
         echo "Flavors: $flavors"
-        echo "list=$flavors" >> "$GITHUB_OUTPUT"
+        echo "Arches: $arches"
+        echo "flavors=$flavors" >> "$GITHUB_OUTPUT"
+        echo "arches=$arches" >> "$GITHUB_OUTPUT"
 
-    # --no-validate: this tracks version-to-version drift, not fidelity
-    # against misc/<series>/zabbly-config (which may not exist yet for a brand
-    # new series, or may be stale relative to this exact point release).
-    - name: Generate configs for every flavor
+    # --no-validate: this tracks version-to-version drift, not fidelity against
+    # misc/<series>/reference-<arch>-config, which may not exist yet for a
+    # brand new series or may be stale for this exact point release.
+    - name: Generate configs for every flavor and arch
       shell: bash
       env:
         VERSION: ${{ inputs.version }}
-        FLAVORS: ${{ steps.flavors.outputs.list }}
+        FLAVORS: ${{ steps.matrix.outputs.flavors }}
+        ARCHES: ${{ steps.matrix.outputs.arches }}
       run: |
         set -euo pipefail
         outdir="configs/$VERSION"
         mkdir -p "$outdir"
         for flavor in $FLAVORS; do
           ./check_slices.py "$flavor"
-          ./genconfig.sh "$flavor" --normalize --no-validate
+          for arch in $ARCHES; do
+            ./genconfig.sh "$arch" "$flavor" --normalize --no-validate
 
-          if [ "$flavor" = "generic" ]; then
-            src="generated_config"
-          else
-            src="generated_config-$flavor"
-          fi
-          cp "$src" "$outdir/${flavor}-config"
-          cp "${src}-defconfig" "$outdir/${flavor}-config-defconfig"
+            src="generated_config-$flavor-$arch"
+            cp "$src" "$outdir/${flavor}-${arch}-config"
+            cp "${src}-defconfig" "$outdir/${flavor}-${arch}-config-defconfig"
+          done
         done
 
     # Both forms matter: the defconfig (minimal) diff is what actually changed
@@ -116,7 +123,8 @@ runs:
       shell: bash
       env:
         VERSION: ${{ inputs.version }}
-        FLAVORS: ${{ steps.flavors.outputs.list }}
+        FLAVORS: ${{ steps.matrix.outputs.flavors }}
+        ARCHES: ${{ steps.matrix.outputs.arches }}
         DIFF_BASE: ${{ inputs.diff-base }}
       run: |
         set -euo pipefail
@@ -130,14 +138,16 @@ runs:
 
         mkdir -p "${RUNNER_TEMP}/diffs"
         for flavor in $FLAVORS; do
-          for kind in config config-defconfig; do
-            new="configs/$VERSION/${flavor}-${kind}"
-            old="configs/${base}/${flavor}-${kind}"
-            out="${RUNNER_TEMP}/diffs/${flavor}.${kind}.diff"
-            if [ -n "$base" ] && [ -f "$old" ]; then
-              diff -u "$old" "$new" > "$out" || true
-            else
-              echo "(no base version to diff against)" > "$out"
-            fi
+          for arch in $ARCHES; do
+            for kind in config config-defconfig; do
+              new="configs/$VERSION/${flavor}-${arch}-${kind}"
+              old="configs/${base}/${flavor}-${arch}-${kind}"
+              out="${RUNNER_TEMP}/diffs/${flavor}.${arch}.${kind}.diff"
+              if [ -n "$base" ] && [ -f "$old" ]; then
+                diff -u "$old" "$new" > "$out" || true
+              else
+                echo "(no base version to diff against)" > "$out"
+              fi
+            done
           done
         done
