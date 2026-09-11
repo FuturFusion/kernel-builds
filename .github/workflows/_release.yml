@@ -86,7 +86,7 @@ jobs:
         id: arches
         run: |
           set -euo pipefail
-          arches='["amd64"]'
+          arches=$(jq -R -s -c 'split("\n") | map(select(length > 0))' < arches)
           echo "Arches: $arches"
           echo "list=$arches" >> "$GITHUB_OUTPUT"
 
