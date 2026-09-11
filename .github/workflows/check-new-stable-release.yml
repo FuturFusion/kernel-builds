@@ -15,7 +15,8 @@ name: Check for a new stable kernel release
 #     auto-merged: a manual review covers the (large) cross-series diff, merges it,
 #     and pushes the v<version>-1 tag themselves. The one branch is reused
 #     for the whole series -- when a newer point release lands, that same
-#     draft PR is force-updated to it with fresh diffs.
+#     draft PR is force-updated to it with fresh diffs. Kept in sync as long
+#     as the branch exists; only a deleted branch stops it.
 
 on:
   schedule:
@@ -129,7 +130,6 @@ jobs:
             next_branch="kernel-config/v${next_series}.x"
 
             open_num="$(gh pr list --head "$next_branch" --state open --json number --jq '.[0].number // empty')"
-            any_num="$(gh pr list --head "$next_branch" --state all --json number --jq '.[0].number // empty')"
             if [ -n "$open_num" ]; then
               # Update the existing draft only if it is not already at this
               # version. The current target is recorded as a marker in the
@@ -139,13 +139,13 @@ jobs:
               if [ "$FORCE" = "true" ] || [ "$cur" != "$next_version" ]; then
                 next_action="upsert"
               fi
-            elif [ -z "$any_num" ]; then
-              # No draft has ever been opened for this series -> open one.
+            else
+              # No open PR. Whether the branch survives (its PR was closed,
+              # or never opened) or not, act: update it if it's there, create
+              # it if it's not. A closed PR alone never blocks this -- only a
+              # deleted branch would mean there's nothing left to update.
               next_action="upsert"
             fi
-            # A closed/merged PR for this branch and no open one -> leave it
-            # alone; it was dealt with manually (a merge advances the tracked
-            # series on the next run anyway).
           fi
           {
             echo "next_series=$next_series"
