@@ -11,7 +11,7 @@ these helpers and states the policy for one kernel, plus its data fragments:
     flavors/generic/config.py  +  flavors/generic/config_slices/*.config
 
 Adding a flavor means adding another such directory; nothing here needs to
-change. Run one with ./genconfig.sh [flavor].
+change. Run one with ./genconfig.sh <arch> <flavor>.
 
 The three structural shapes a flavor has to deal with, and the tool for each:
 
@@ -24,6 +24,7 @@ enable_umbrella both SETS and WALKS; enable_exact only sets. That distinction
 is load-bearing -- see the STAGING/ACCESSIBILITY note in flavors/generic/config.py.
 """
 import os
+import sys
 
 import kconfiglib
 
@@ -357,16 +358,25 @@ def enable_by_prefix(prefix):
 kconf = None
 
 
-def start(defconfig="arch/x86/configs/x86_64_defconfig"):
-    """Open the kernel tree's Kconfig and seed it with an arch defconfig.
+def start(defconfig=None):
+    """Open the kernel tree's Kconfig and seed it with a defconfig.
 
-    Returns the Kconfig object for the flavor's own direct use (kconf.syms[...]
-    for the handful of cases none of the enable_* helpers fit)."""
+    defconfig defaults to $GENCONFIG_DEFCONFIG (set by genconfig.sh from its
+    arch argument); pass one explicitly for an arch-independent base fragment
+    instead, e.g. kernel/configs/kvm_guest.config.
+
+    Returns the Kconfig object for the flavor's own direct use."""
     global kconf
+    if defconfig is None:
+        defconfig = os.environ.get("GENCONFIG_DEFCONFIG")
+        if not defconfig:
+            sys.exit("genconfig.py: start() needs a defconfig -- set "
+                     "GENCONFIG_DEFCONFIG (genconfig.sh does this from its arch "
+                     "argument) or pass one explicitly.")
     kconf = kconfiglib.standard_kconfig()
-    # This path genuinely lives inside the kernel tree, so a plain relative
-    # path (resolved against cwd, which is $KERNEL_SRC after kconf-run.sh's
-    # cd) is correct as-is -- don't route it through here().
+    # These paths live inside the kernel tree, so a plain relative path
+    # (resolved against cwd, which is $KERNEL_SRC after kconf-run.sh's cd) is
+    # correct as-is -- don't route it through here().
     kconf.load_config(defconfig)
     return kconf
 

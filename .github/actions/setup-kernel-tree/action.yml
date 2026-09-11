@@ -1,0 +1,52 @@
+name: Set up a kernel source tree
+description: >
+  Install the kernel build dependencies, fetch (and cache) the linux-<version>
+  source tarball from cdn.kernel.org, unpack it under ~/kernel, and write a
+  .env pointing genconfig.sh at it. Assumes the repo is already checked out.
+
+inputs:
+  version:
+    description: "Exact kernel version to fetch, e.g. 7.1.12."
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Install kernel build dependencies
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends \
+          build-essential flex bison bc libelf-dev libssl-dev dwarves python3
+
+    - name: Cache kernel source tree
+      id: cache
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/kernel/linux-${{ inputs.version }}
+        key: linux-src-${{ inputs.version }}
+
+    - name: Download kernel source tree
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        major="${VERSION%%.*}"
+        url="https://cdn.kernel.org/pub/linux/kernel/v${major}.x/linux-${VERSION}.tar.xz"
+        mkdir -p ~/kernel
+        echo "Fetching $url"
+        curl -fSL --retry 3 "$url" | tar -xJ -C ~/kernel
+        test -f ~/kernel/linux-"$VERSION"/Makefile
+
+    - name: Create .env
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        sed -e "s|^KERNEL_TREE_PATH=.*|KERNEL_TREE_PATH=$HOME/kernel/linux-$VERSION|" \
+            -e "s|^KERNEL_TREE_BUILD_PATH=.*|KERNEL_TREE_BUILD_PATH=$RUNNER_TEMP/kernel-build|" \
+            .env.example > .env
+        cat .env
