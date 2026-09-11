@@ -15,17 +15,18 @@ graphics, media capture, wireless, consumer interconnects -- is exactly what
 this flavor exists to leave out. The block near the end that the generic
 flavor marks VALIDATION-ONLY is the obvious first thing to go.
 
-It is still compared against misc/zabbly-config, because that is the only
-reference config in the tree and a diff is more informative than no diff. But
-unlike the generic flavor, a *large* diff is the goal here, not a defect:
-byte-parity with a general-purpose distro kernel would mean this flavor had
-failed at its job. Read its diff as a list of what has been dropped so far.
+It is still compared against misc/<series>/reference-<arch>-config, because
+that is the only reference config in the tree and a diff is more informative
+than no diff. But unlike the generic flavor, a *large* diff is the goal here,
+not a defect: byte-parity with a general-purpose distro kernel would mean this
+flavor had failed at its job. Read its diff as a list of what has been dropped
+so far.
 
 The data half lives in config_slices/ next to this file, loaded near the end.
 Anything that is genuinely per-symbol policy (no family, no gate, no prefix)
 belongs there rather than here.
 
-Run with ./genconfig.sh server.
+Run with ./genconfig.sh <arch> server.
 """
 import os
 import sys
@@ -153,7 +154,7 @@ enable_umbrella("INFINIBAND", 1, label="INFINIBAND")
 # CONFIG_EXPERT: kernel-wide visibility switch, not a driver subsystem.
 # A large fraction of options across the ENTIRE tree are gated behind
 # "depends on EXPERT" or change their default under "!EXPERT" -- this is
-# almost certainly higher-leverage than any single umbrella fix so far,
+# almost certainly has a bigger effect than any single umbrella fix so far,
 # since it isn't scoped to one subsystem. Confirmed real (zabbly-config
 # has CONFIG_EXPERT=y, ours had it off) via the raw diff, not the
 # umbrella-scoped cross-reference tooling -- this lives in init/Kconfig,
@@ -849,7 +850,7 @@ if "XDP_SOCKETS_DIAG" in kconf.syms:
 # support, etc.) are exactly what the rest of this project exists to leave
 # OUT of the production server kernel. They're enabled here purely to
 # reproduce zabbly-config as a way of proving the genconfig.py machinery
-# itself (env setup, Kconfiglib fidelity, the subtree-walk technique) is
+# itself (env setup, Kconfiglib accuracy, the subtree-walk technique) is
 # trustworthy. Do not copy this block into a production config.
 # ============================================================================
 

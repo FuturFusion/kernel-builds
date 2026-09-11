@@ -5,18 +5,18 @@ This is the *policy* half of the generator -- what to switch on and why. All
 the machinery it calls lives in genconfig.py; this file contains no Kconfig
 tree-walking logic of its own, only decisions.
 
-Its target is byte-parity with misc/zabbly-config (Ubuntu-flavored, x86_64,
-general-purpose desktop/server), which is what makes it a usable test of the
-genconfig.py machinery: a diff of zero proves the walker, the deny-list and
-the environment setup all behave like the real C kconfig. A large block near
-the end is therefore VALIDATION-ONLY -- sound, graphics, media, wireless
-laptop hardware -- and is explicitly marked as such.
+Its target is byte-parity with misc/<series>/reference-<arch>-config
+(Ubuntu-flavored, general-purpose desktop/server), which is what makes it a
+usable test of the genconfig.py machinery: a diff of zero proves the walker,
+the deny-list and the environment setup all behave like the real C kconfig. A
+large block near the end is therefore VALIDATION-ONLY -- sound, graphics,
+media, wireless laptop hardware -- and is explicitly marked as such.
 
 The data half lives in config_slices/ next to this file, loaded near the end.
 Anything that is genuinely per-symbol distro policy (no family, no gate, no
 prefix) belongs there rather than here.
 
-Run with ./genconfig.sh (or ./genconfig.sh generic).
+Run with ./genconfig.sh <arch> generic.
 """
 import os
 import sys
@@ -151,7 +151,7 @@ enable_umbrella("INFINIBAND", 1, label="INFINIBAND")
 # CONFIG_EXPERT: kernel-wide visibility switch, not a driver subsystem.
 # A large fraction of options across the ENTIRE tree are gated behind
 # "depends on EXPERT" or change their default under "!EXPERT" -- this is
-# almost certainly higher-leverage than any single umbrella fix so far,
+# almost certainly has a bigger effect than any single umbrella fix so far,
 # since it isn't scoped to one subsystem. Confirmed real (zabbly-config
 # has CONFIG_EXPERT=y, ours had it off) via the raw diff, not the
 # umbrella-scoped cross-reference tooling -- this lives in init/Kconfig,
@@ -992,7 +992,7 @@ if "XDP_SOCKETS_DIAG" in kconf.syms:
 # support, etc.) are exactly what the rest of this project exists to leave
 # OUT of the production server kernel. They're enabled here purely to
 # reproduce zabbly-config as a way of proving the genconfig.py machinery
-# itself (env setup, Kconfiglib fidelity, the subtree-walk technique) is
+# itself (env setup, Kconfiglib accuracy, the subtree-walk technique) is
 # trustworthy. Do not copy this block into a production config.
 # ============================================================================
 
