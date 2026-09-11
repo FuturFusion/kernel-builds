@@ -1,0 +1,153 @@
+name: Generate flavor configs
+description: >
+  Download and cryptographically verify a kernel source tree, generate
+  configs/<version>/<flavor>-<arch>-config for every automated flavor (those
+  without a flavors/<name>/.noautomation marker) and every arch in ./arches,
+  and compute per-(flavor, arch) unified diffs against a base version already
+  tracked under configs/. The diffs are left in
+  ${RUNNER_TEMP}/diffs/<flavor>.<arch>.<kind>.diff for the caller to post.
+
+  Assumes the repository is already checked out (with submodules) in the
+  current working directory.
+
+inputs:
+  version:
+    description: "Exact kernel version to generate for, e.g. 7.2.4."
+    required: true
+  diff-base:
+    description: >
+      Version under configs/ to diff the freshly generated configs against.
+      Empty (the default) means auto-detect: the highest configs/<x> other
+      than <version>.
+    required: false
+    default: ""
+
+outputs:
+  flavors:
+    description: "Space-separated list of flavors that were generated."
+    value: ${{ steps.matrix.outputs.flavors }}
+  arches:
+    description: "Space-separated list of arches that were generated."
+    value: ${{ steps.matrix.outputs.arches }}
+  diff-base:
+    description: "The version actually diffed against (empty if there was none)."
+    value: ${{ steps.diffs.outputs.base }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install kernel build dependencies
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends \
+          build-essential flex bison bc libelf-dev libssl-dev dwarves \
+          python3 gnupg xz-utils
+
+    # Config generation only needs the Kconfig tree on disk, not git history,
+    # so a plain verified tarball extraction is enough and much lighter than
+    # a full stable-tree clone.
+    - name: Download and verify the kernel source tree
+      shell: bash
+      env:
+        TARGETDIR: ${{ runner.temp }}/kernel-dl
+        GNUPGHOME: ${{ runner.temp }}/gnupg
+        VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        mkdir -p "$TARGETDIR"
+        mkdir -p "$GNUPGHOME"
+        chmod 0700 "$GNUPGHOME"
+        ./scripts/get-verified-tarball "$VERSION"
+
+        mkdir -p ~/kernel
+        tar -xf "$TARGETDIR/linux-$VERSION.tar.xz" -C ~/kernel
+        test -f ~/kernel/linux-"$VERSION"/Makefile
+
+    - name: Create .env
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        sed -e "s|^KERNEL_TREE_PATH=.*|KERNEL_TREE_PATH=$HOME/kernel/linux-$VERSION|" \
+            -e "s|^KERNEL_TREE_BUILD_PATH=.*|KERNEL_TREE_BUILD_PATH=${RUNNER_TEMP}/kernel-build|" \
+            .env.example > .env
+
+    # Flavors: every flavors/<name>/ without a .noautomation marker (that marker
+    # keeps a flavor out of everything automated; `./genconfig.sh <arch> <name>`
+    # still works by hand). Arches: the lines of ./arches.
+    - name: Determine flavors and arches
+      id: matrix
+      shell: bash
+      run: |
+        set -euo pipefail
+        flavors="$(find flavors -mindepth 1 -maxdepth 1 -type d \
+                     ! -exec test -e '{}/.noautomation' ';' -printf '%f ')"
+        arches="$(tr '\n' ' ' < arches)"
+        echo "Flavors: $flavors"
+        echo "Arches: $arches"
+        echo "flavors=$flavors" >> "$GITHUB_OUTPUT"
+        echo "arches=$arches" >> "$GITHUB_OUTPUT"
+
+    # --no-validate: this tracks version-to-version drift, not fidelity against
+    # misc/<series>/reference-<arch>-config, which may not exist yet for a
+    # brand new series or may be stale for this exact point release.
+    - name: Generate configs for every flavor and arch
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+        FLAVORS: ${{ steps.matrix.outputs.flavors }}
+        ARCHES: ${{ steps.matrix.outputs.arches }}
+      run: |
+        set -euo pipefail
+        outdir="configs/$VERSION"
+        mkdir -p "$outdir"
+        for flavor in $FLAVORS; do
+          ./check_slices.py "$flavor"
+          for arch in $ARCHES; do
+            ./genconfig.sh "$arch" "$flavor" --normalize --no-validate
+
+            src="generated_config-$flavor-$arch"
+            cp "$src" "$outdir/${flavor}-${arch}-config"
+            cp "${src}-defconfig" "$outdir/${flavor}-${arch}-config-defconfig"
+          done
+        done
+
+    # Both forms matter: the defconfig (minimal) diff is what actually changed
+    # with dependencies/defaults stripped out, but the full config is what
+    # ships, and a defconfig-only diff can hide a real difference if a
+    # default value itself moved between kernel versions.
+    - name: Compute diffs against the base version
+      id: diffs
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+        FLAVORS: ${{ steps.matrix.outputs.flavors }}
+        ARCHES: ${{ steps.matrix.outputs.arches }}
+        DIFF_BASE: ${{ inputs.diff-base }}
+      run: |
+        set -euo pipefail
+        base="$DIFF_BASE"
+        if [ -z "$base" ]; then
+          base="$(find configs -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null \
+                  | grep -vFx "$VERSION" | sort -V | tail -1 || true)"
+        fi
+        echo "Diff base: ${base:-(none)}"
+        echo "base=$base" >> "$GITHUB_OUTPUT"
+
+        mkdir -p "${RUNNER_TEMP}/diffs"
+        for flavor in $FLAVORS; do
+          for arch in $ARCHES; do
+            for kind in config config-defconfig; do
+              new="configs/$VERSION/${flavor}-${arch}-${kind}"
+              old="configs/${base}/${flavor}-${arch}-${kind}"
+              out="${RUNNER_TEMP}/diffs/${flavor}.${arch}.${kind}.diff"
+              if [ -n "$base" ] && [ -f "$old" ]; then
+                diff -u "$old" "$new" > "$out" || true
+              else
+                echo "(no base version to diff against)" > "$out"
+              fi
+            done
+          done
+        done

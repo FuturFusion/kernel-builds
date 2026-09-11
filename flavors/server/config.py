@@ -15,17 +15,18 @@ graphics, media capture, wireless, consumer interconnects -- is exactly what
 this flavor exists to leave out. The block near the end that the generic
 flavor marks VALIDATION-ONLY is the obvious first thing to go.
 
-It is still compared against misc/zabbly-config, because that is the only
-reference config in the tree and a diff is more informative than no diff. But
-unlike the generic flavor, a *large* diff is the goal here, not a defect:
-byte-parity with a general-purpose distro kernel would mean this flavor had
-failed at its job. Read its diff as a list of what has been dropped so far.
+It is still compared against misc/<series>/reference-<arch>-config, because
+that is the only reference config in the tree and a diff is more informative
+than no diff. But unlike the generic flavor, a *large* diff is the goal here,
+not a defect: byte-parity with a general-purpose distro kernel would mean this
+flavor had failed at its job. Read its diff as a list of what has been dropped
+so far.
 
 The data half lives in config_slices/ next to this file, loaded near the end.
 Anything that is genuinely per-symbol policy (no family, no gate, no prefix)
 belongs there rather than here.
 
-Run with ./genconfig.sh server.
+Run with ./genconfig.sh <arch> server.
 """
 import os
 import sys

@@ -5,18 +5,18 @@ This is the *policy* half of the generator -- what to switch on and why. All
 the machinery it calls lives in genconfig.py; this file contains no Kconfig
 tree-walking logic of its own, only decisions.
 
-Its target is byte-parity with misc/zabbly-config (Ubuntu-flavored, x86_64,
-general-purpose desktop/server), which is what makes it a usable test of the
-genconfig.py machinery: a diff of zero proves the walker, the deny-list and
-the environment setup all behave like the real C kconfig. A large block near
-the end is therefore VALIDATION-ONLY -- sound, graphics, media, wireless
-laptop hardware -- and is explicitly marked as such.
+Its target is byte-parity with misc/<series>/reference-<arch>-config
+(Ubuntu-flavored, general-purpose desktop/server), which is what makes it a
+usable test of the genconfig.py machinery: a diff of zero proves the walker,
+the deny-list and the environment setup all behave like the real C kconfig. A
+large block near the end is therefore VALIDATION-ONLY -- sound, graphics,
+media, wireless laptop hardware -- and is explicitly marked as such.
 
 The data half lives in config_slices/ next to this file, loaded near the end.
 Anything that is genuinely per-symbol distro policy (no family, no gate, no
 prefix) belongs there rather than here.
 
-Run with ./genconfig.sh (or ./genconfig.sh generic).
+Run with ./genconfig.sh <arch> generic.
 """
 import os
 import sys
