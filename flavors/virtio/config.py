@@ -9,7 +9,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.dirname(os.path.abspath(__file__)))))
 
 from genconfig import (
-    enable_exact,
     enable_umbrella,
     finish,
     load_slices,
@@ -30,57 +29,6 @@ if "KERNEL_ZSTD" in kconf.syms:
 
 if "PREEMPT" in kconf.syms:
     kconf.syms["PREEMPT"].set_value(2)  # y
-
-enable_umbrella("INET_DIAG", 1, label="INET_DIAG")
-
-# --- IP6_NF_NAT: the real prerequisite for IP6_NF_TARGET_MASQUERADE,
-# never touched despite IP6_NF_IPTABLES itself being on.
-# IP6_NF_IPTABLES (legacy ip6tables) was never enabled at all -- we only
-# ever did IP_NF_IPTABLES (IPv4). This is the real prerequisite for
-# IP6_NF_NAT / IP6_NF_TARGET_MASQUERADE.
-enable_umbrella("IP6_NF_IPTABLES", 1, label="IP6_NF_IPTABLES")
-enable_umbrella("IP6_NF_NAT", 1, label="IP6_NF_NAT")
-
-# --- IP_SET (netfilter ipset): its own separate menuconfig umbrella in
-#     net/netfilter/ipset/Kconfig -- distinct from NETFILTER_XTABLES/
-#     NF_TABLES/NF_CONNTRACK, never touched this whole session.
-enable_umbrella("IP_SET", 1, label="IP_SET")
-
-# --- BRIDGE_NF_EBTABLES (ebtables, the bridge-layer sibling to iptables/
-#     ip6tables/arptables): its prerequisites (BRIDGE, NETFILTER,
-#     NETFILTER_XTABLES) are all already on, but the umbrella itself was
-#     never explicitly enabled or walked. Note: this is the modern
-#     ebtables path, distinct from BRIDGE_NF_EBTABLES_LEGACY (the old
-#     sockopt interface gated by NETFILTER_XTABLES_LEGACY, which we
-#     already turned on separately for the same byte-parity reasons).
-enable_umbrella("BRIDGE_NF_EBTABLES", 1, label="BRIDGE_NF_EBTABLES")
-
-# IP_NF_ARPTABLES: legacy arptables, a third family alongside
-# IP_NF_IPTABLES/IP6_NF_IPTABLES that was never explicitly touched.
-# Covers IP_NF_ARPFILTER/ARP_MANGLE as children.
-enable_umbrella("IP_NF_ARPTABLES", 1, label="IP_NF_ARPTABLES")
-
-enable_exact(("BRIDGE_NETFILTER", 1), ("NF_CT_NETLINK_HELPER", 1),
-             ("NETFILTER_NETLINK_GLUE_CT", 2), ("NETFILTER_XT_MATCH_PHYSDEV", 1),
-             ("NF_LOG_ARP", 1), ("NF_LOG_IPV4", 1), ("NF_CONNTRACK_BRIDGE", 1))
-
-# --- net/netfilter/Kconfig: the x_tables match/target module zoo itself.
-#     We flipped NETFILTER_XTABLES_LEGACY on for byte-parity earlier, but
-#     never actually walked NETFILTER_XTABLES's own subtree -- that's a
-#     separate thing (the module list, not the legacy-tools switch).
-enable_umbrella("NETFILTER_XTABLES", 1, label="NETFILTER_XTABLES")
-
-# --- net/ipv4/netfilter/Kconfig: legacy iptables match modules
-#     (IP_NF_MATCH_*) -- same story, the LEGACY switch alone doesn't walk
-#     this subtree.
-enable_umbrella("IP_NF_IPTABLES", 1, label="IP_NF_IPTABLES")
-
-# --- net/netfilter/Kconfig: NF_CONNTRACK proper. The netfilter.config
-#     fragment (loaded later) hand-picks a subset of NF_CONNTRACK_* --
-#     walking the real subtree here covers what that hand-picked list
-#     missed; the fragment's own explicit values still apply on top and
-#     win where they differ, since it loads after this.
-enable_umbrella("NF_CONNTRACK", 1, label="NF_CONNTRACK")
 
 # --- net/bridge/Kconfig
 enable_umbrella("BRIDGE", 1, label="BRIDGE")
@@ -130,7 +78,6 @@ if "ZSWAP_COMPRESSOR_DEFAULT_LZO" in kconf.syms:
 # ============================================================================
 load_slices(
     FLAVOR,
-    "nf_tables",
     "platform",
     "filesystems",
     "block_devices",
