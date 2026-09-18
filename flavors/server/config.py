@@ -971,6 +971,7 @@ load_slices(
     "crypto",
     "misc",
     "drivers",
+    "drm",
 )
 
 
