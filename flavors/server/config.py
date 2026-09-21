@@ -178,16 +178,6 @@ if "KERNEL_ZSTD" in kconf.syms:
 if "PREEMPT" in kconf.syms:
     kconf.syms["PREEMPT"].set_value(2)  # y
 
-# --- Raw-NAND flash filesystems. UBIFS_FS depends on MTD_UBI (the UBI
-# volume-management layer), a separate umbrella we hadn't touched.
-enable_umbrella("MTD_UBI", 1, label="MTD_UBI")
-enable_umbrella("UBIFS_FS", 1, label="UBIFS_FS")
-enable_umbrella("JFFS2_FS", 1, label="JFFS2_FS")
-
-# --- TIPC (Transparent Inter-Process Communication) -- real cluster/
-# cloud networking protocol, never touched.
-enable_umbrella("TIPC", 1, label="TIPC")
-
 # --- FUSION (LSI/Broadcom Fusion-MPT SCSI/FC/SAS HBA family) -- a
 # separate umbrella from SCSI_LOWLEVEL, genuinely relevant enterprise
 # storage/HBA hardware, never touched.
@@ -241,15 +231,6 @@ enable_umbrella("VME_BUS", 2, label="VME_BUS")
 enable_umbrella("MCB", 1, label="MCB")
 enable_by_prefix("LITEX_")
 enable_by_prefix("KEBA_")
-
-# --- Same story for the PCI/USB card-reader bridge chips in
-# drivers/misc/cardreader: MISC_RTSX itself is promptless and selected by the
-# PCI/USB halves. They gate the SD/MMC and Memory Stick front-ends
-# (MMC_REALTEK_PCI/USB, MMC_ALCOR, MEMSTICK_REALTEK_PCI/USB), so they have to
-# precede the MMC/MEMSTICK families below. The whole "MISC_" prefix is safe to
-# sweep -- it is only these three plus MISC_RP1 (Raspberry Pi southbridge, also
-# =m in zabbly) and the MISC_FILESYSTEMS menu gate.
-enable_by_prefix("MISC_")
 
 # ============================================================================
 # Fourth batch: clock generator chips, mailbox/hwspinlock, IOMMUFD.
@@ -458,15 +439,6 @@ enable_exact(("BRIDGE_NETFILTER", 1), ("NF_CT_NETLINK_HELPER", 1),
 # --- MPTCP (Multipath TCP) -- never touched.
 enable_umbrella("MPTCP", 2, label="MPTCP")
 enable_exact(("INET_MPTCP_DIAG", 1), ("MPTCP_IPV6", 2))
-
-# --- IP_SCTP -- whole protocol never enabled before.
-enable_umbrella("IP_SCTP", 1, label="IP_SCTP")
-enable_exact(("INET_SCTP_DIAG", 1), ("SCTP_DBG_OBJCNT", 0))  # DBG doesn't
-# match the "DEBUG" deny-list pattern, so explicit insurance is needed.
-
-# --- RDS (Reliable Datagram Sockets) -- ties to our INFINIBAND/RDMA work.
-enable_umbrella("RDS", 1, label="RDS")
-enable_exact(("RDS_DEBUG", 0))  # same DBG/DEBUG naming gap as above
 
 # --- USB: turns out to be unusually fragmented -- Cadence (USB_CDNS_
 #     SUPPORT) and ChipIdea are THIRD-PARTY sibling umbrellas (separate
@@ -688,10 +660,6 @@ enable_umbrella("AFS_FS", 1, label="AFS_FS")
 enable_by_prefix("AFS_")                               # AFS_FSCACHE
 enable_umbrella("FW_CFG_SYSFS", 1, label="FW_CFG_SYSFS")  # QEMU fw_cfg sysfs interface
 
-# --- Menuconfig gates that were already at the right value but had never been
-# WALKED, so their entire driver zoo sat at default-off. enable_umbrella on an
-# already-correct gate is not a no-op: the walk is the point.
-enable_umbrella("MISC_FILESYSTEMS", 2, label="MISC_FILESYSTEMS")  # ADFS/AFFS/BEFS/BFS/CODA/EFS/GFS2/HFS(+PLUS)/HPFS/MINIX/NILFS2/OMFS/ORANGEFS/QNX4/QNX6/UFS/VBOXSF/VXFS/ECRYPT
 enable_umbrella("DMADEVICES", 2, label="DMADEVICES")   # dmaengine drivers: IOAT/IDMA64/PTDMA/QDMA/DW(+AXI)/PLX/SWITCHTEC/ALTERA/XILINX (SoC ones cap on x86)
 enable_umbrella("MULTIPLEXER", 2, label="MULTIPLEXER") # MUX_ADG792A/ADGS1408/GPIO/MMIO
 enable_umbrella("PM_DEVFREQ", 2, label="PM_DEVFREQ")   # devfreq governors: SIMPLE_ONDEMAND/PERFORMANCE/POWERSAVE/USERSPACE/PASSIVE
