@@ -54,6 +54,21 @@ on:
         required: false
         type: string
         default: ""
+      ref:
+        description: >
+          Git ref (tag/branch/SHA) to build from. Leave empty (the default)
+          to let checkout use its own default -- correct for a
+          workflow_dispatch-triggered ad hoc build, since the ambient ref is
+          already the branch it was run against. Callers must set this
+          explicitly whenever their own ambient ref is not already the
+          commit to build: _release.yml passes the release tag here because
+          one of its callers, auto-merge-config.yml, invokes it from a
+          workflow_run trigger -- whose ambient ref is not the tag that was
+          just pushed, so without this the checkout below would silently
+          build the pre-merge tree.
+        required: false
+        type: string
+        default: ""
     outputs:
       artifact_name:
         description: "Name of the uploaded build artifact for this (flavor, kernel_version)."
@@ -92,6 +107,7 @@ jobs:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ inputs.ref }}
           submodules: recursive
           persist-credentials: false
 
