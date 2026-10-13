@@ -137,6 +137,10 @@ jobs:
       generate_config: false
       validate: false
       package_version: ${{ needs.parse-tag.outputs.package_version }}
+      # Pin the exact tag: our own ambient ref isn't reliable either -- when
+      # auto-merge-config.yml calls us, it's from a workflow_run trigger, not
+      # the tag push itself.
+      ref: ${{ inputs.tag }}
 
   release:
     name: Create the GitHub release
