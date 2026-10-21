@@ -284,6 +284,32 @@ jobs:
             done
           done
 
+      - name: Comment a patch-application failure on the PR
+        if: steps.guard.outputs.skip != 'true' && steps.gen.outputs.patches-ok != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_URL: ${{ steps.pr.outputs.url }}
+          LOG_PATH: ${{ steps.gen.outputs.patches-log }}
+        run: |
+          set -euo pipefail
+          {
+            echo "### :warning: An out-of-tree patch failed to apply for Linux $VERSION"
+            echo
+            echo "Config generation above still used the unpatched tree, so the"
+            echo "configs in this PR may not reflect what the patch would have"
+            echo "changed. Either way, a maintainer needs to fix the patch before it's safe"
+            echo "to build/release \`$VERSION\`. This PR's own CI check will fail for"
+            echo "the same reason, which keeps it from being auto-merged."
+            echo
+            echo '<details><summary>Patch application output</summary>'
+            echo
+            echo '```'
+            cat "$LOG_PATH" 2>/dev/null || echo "(log not available)"
+            echo '```'
+            echo
+            echo '</details>'
+          } | gh pr comment "$PR_URL" --body-file -
+
   next-series:
     name: Next-series draft PR for ${{ needs.plan.outputs.next_version }}
     needs: plan
@@ -304,6 +330,21 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: recursive
+
+      # First time this series is seen: carry the previous series' patches
+      # forward verbatim so generation below actually exercises them against
+      # the new source. Skipped if patches/<new series> already exists (e.g.
+      # a reviewer already edited it on a prior force-update of this same
+      # draft) -- never clobber that.
+      - name: Carry patches forward into the new series
+        env:
+          OLD_SERIES: ${{ needs.plan.outputs.tracked_series }}
+        run: |
+          set -euo pipefail
+          if [ -d "patches/$OLD_SERIES" ] && [ ! -d "patches/$SERIES" ]; then
+            echo "Carrying patches/$OLD_SERIES forward to patches/$SERIES for manual review."
+            cp -r "patches/$OLD_SERIES" "patches/$SERIES"
+          fi
 
       - name: Generate configs and diffs
         id: gen
@@ -328,6 +369,9 @@ jobs:
           set -euo pipefail
           git checkout -B "$BRANCH" origin/main
           git add "configs/$VERSION"
+          if [ -d "patches/$SERIES" ]; then
+            git add "patches/$SERIES"
+          fi
           git commit -m "configs: add generated configs for Linux $VERSION (${SERIES}.x draft)"
           git push origin "+HEAD:refs/heads/${BRANCH}"
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
@@ -404,3 +448,29 @@ jobs:
               } | gh pr comment "$PR_URL" --body-file -
             done
           done
+
+      - name: Comment a patch-application failure on the PR
+        if: steps.gen.outputs.patches-ok != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_URL: ${{ steps.pr.outputs.url }}
+          LOG_PATH: ${{ steps.gen.outputs.patches-log }}
+          OLD_SERIES: ${{ needs.plan.outputs.tracked_series }}
+        run: |
+          set -euo pipefail
+          {
+            echo "### :warning: An out-of-tree patch failed to apply for Linux $VERSION"
+            echo
+            echo "Config generation above still used the unpatched tree -- but since"
+            echo "this is a next-series draft, \`patches/$SERIES\` was just carried"
+            echo "forward from \`patches/$OLD_SERIES\` and needs a maintainer to check it"
+            echo "still applies (or drop/update it) before this PR is merged."
+            echo
+            echo '<details><summary>Patch application output</summary>'
+            echo
+            echo '```'
+            cat "$LOG_PATH" 2>/dev/null || echo "(log not available)"
+            echo '```'
+            echo
+            echo '</details>'
+          } | gh pr comment "$PR_URL" --body-file -

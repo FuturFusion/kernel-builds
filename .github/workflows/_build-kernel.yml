@@ -203,6 +203,9 @@ jobs:
           git -C ~/kernel/linux-stable verify-tag "v${KERNEL_VERSION}"
           git -C ~/kernel/linux-stable checkout --detach "v${KERNEL_VERSION}"
 
+      - name: Apply out-of-tree patches
+        run: ./scripts/apply-kernel-patches.sh ~/kernel/linux-stable "$series"
+
       - name: Create .env
         run: |
           set -euo pipefail

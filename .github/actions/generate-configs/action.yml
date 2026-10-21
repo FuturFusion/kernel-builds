@@ -32,6 +32,19 @@ outputs:
   diff-base:
     description: "The version actually diffed against (empty if there was none)."
     value: ${{ steps.diffs.outputs.base }}
+  patches-ok:
+    description: >
+      "true" if every patches/<series>/*.patch applied cleanly (or there were
+      none to apply), "false" if at least one failed. Not fatal to this
+      action -- generation still runs against the unpatched tree either way,
+      so this PR's config generation itself never blocks on it. The caller
+      decides what to do with a "false" (e.g. comment the failure on a PR);
+      setup-kernel-tree applies the same patches fatally for CI's own
+      validation checks, which is what actually should block a merge.
+    value: ${{ steps.patches.outcome == 'success' }}
+  patches-log:
+    description: "Path to the raw output of the patch-application attempt."
+    value: ${{ steps.patches-log.outputs.path }}
 
 runs:
   using: composite
@@ -63,6 +76,38 @@ runs:
         mkdir -p ~/kernel
         tar -xf "$TARGETDIR/linux-$VERSION.tar.xz" -C ~/kernel
         test -f ~/kernel/linux-"$VERSION"/Makefile
+
+    - name: Determine kernel series
+      id: series
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        echo "series=$(echo "${VERSION%%-*}" | cut -d. -f1,2)" >> "$GITHUB_OUTPUT"
+
+    # Not fatal (continue-on-error): this action's job is to produce a config
+    # PR for a maintainer to look at, so a failed patch here doesn't stop that --
+    # generation just proceeds against the unpatched tree. The caller
+    # surfaces steps.patches.outcome/patches-log however it wants (e.g. a PR
+    # comment); separately, setup-kernel-tree applies the same patches
+    # *fatally* for CI's own validation checks, which is what actually
+    # should block auto-merge if the patch matters for this config.
+    - name: Apply out-of-tree patches
+      id: patches
+      continue-on-error: true
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+        SERIES: ${{ steps.series.outputs.series }}
+      run: |
+        ./scripts/apply-kernel-patches.sh "$HOME/kernel/linux-$VERSION" "$SERIES" 2>&1 \
+          | tee "${RUNNER_TEMP}/patch-apply.log"
+
+    - name: Record patch log path
+      id: patches-log
+      shell: bash
+      run: echo "path=${RUNNER_TEMP}/patch-apply.log" >> "$GITHUB_OUTPUT"
 
     - name: Create .env
       shell: bash

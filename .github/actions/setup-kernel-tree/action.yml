@@ -19,9 +19,9 @@ runs:
         sudo apt-get install -y --no-install-recommends \
           build-essential flex bison bc libelf-dev libssl-dev dwarves python3
 
-    - name: Cache kernel source tree
+    - name: Restore cached kernel source tree
       id: cache
-      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ~/kernel/linux-${{ inputs.version }}
         key: linux-src-${{ inputs.version }}
@@ -39,6 +39,34 @@ runs:
         echo "Fetching $url"
         curl -fSL --retry 3 "$url" | tar -xJ -C ~/kernel
         test -f ~/kernel/linux-"$VERSION"/Makefile
+
+    - name: Save the kernel source tree to cache
+      if: steps.cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/kernel/linux-${{ inputs.version }}
+        key: linux-src-${{ inputs.version }}
+
+    - name: Determine kernel series
+      id: series
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        echo "series=$(echo "${VERSION%%-*}" | cut -d. -f1,2)" >> "$GITHUB_OUTPUT"
+
+    # Always runs, cache hit or miss: the cache above only ever holds the
+    # clean tree, so patches get applied fresh here every time. Fatal on
+    # purpose -- this tree only feeds generate-config.yml's own CI checks,
+    # and a failure here is what blocks auto-merge-config.yml from merging a
+    # config PR whose patch(es) don't apply cleanly.
+    - name: Apply out-of-tree patches
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+        SERIES: ${{ steps.series.outputs.series }}
+      run: ./scripts/apply-kernel-patches.sh "$HOME/kernel/linux-$VERSION" "$SERIES"
 
     - name: Create .env
       shell: bash
