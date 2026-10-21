@@ -3,7 +3,8 @@ name: Auto-merge config PRs
 on:
   workflow_run:
     # zizmor: ignore[dangerous-triggers]
-    workflows: ["Check for a new stable kernel release"]
+    workflows:
+      ["Check for a new stable kernel release", "Lint", "Generate kernel config"]
     types: [completed]
   workflow_dispatch:
     inputs:
