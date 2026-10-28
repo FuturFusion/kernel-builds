@@ -41,6 +41,9 @@ enable_umbrella("BRIDGE", 1, label="BRIDGE")
 #     explicitly (it's a bool with no children of its own).
 enable_umbrella("NET_SCHED", 2, label="NET_SCHED")
 
+# Enable all RAID and LVM device drivers as modules
+enable_umbrella("MD", 2, label="MD")
+
 # --- drivers/md/Kconfig: device-mapper (dm-crypt, dm-thin, dm-raid,
 #     dm-cache, dm-verity, dm-integrity, dm-multipath, ...). Confirmed via
 #     zabbly-config this is its own thing worth walking explicitly, not
