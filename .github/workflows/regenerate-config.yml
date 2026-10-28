@@ -1,0 +1,116 @@
+name: Regenerate kernel config
+
+# Manually triggered one-off: regenerate configs/<version> for a version we
+# already track (e.g. after fixing an out-of-tree patch, or a genconfig.py
+# change) and PR the result for review. Deliberately not wired into
+# auto-merge-config.yml -- it only reacts to "Check for a new stable kernel
+# release" by name, and only ever looks at kernel-config/v<semver> branches,
+# which this workflow never pushes to. Every run gets its own throwaway
+# branch, so re-running for the same version just opens another PR rather
+# than fighting over one.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Exact kernel version to regenerate configs for, e.g. 7.2.12."
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: regenerate-config-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  regenerate:
+    name: Regenerate configs for ${{ inputs.version }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write        # push the throwaway branch
+      pull-requests: write   # open the PR and comment on it if a patch fails to apply
+      actions: write         # approve the PR's own held-for-approval checks
+    env:
+      VERSION: ${{ inputs.version }}
+    steps:
+      # persist-credentials stays at its default (true): the branch is pushed
+      # with plain `git push`, which uses actions/checkout's credential helper.
+      - name: Check out
+        # zizmor: ignore[artipacked]
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+
+      - name: Generate configs
+        id: gen
+        uses: ./.github/actions/generate-configs
+        with:
+          version: ${{ env.VERSION }}
+
+      - name: Create branch and commit the regenerated configs
+        id: commit
+        env:
+          GIT_AUTHOR_NAME: github-actions[bot]
+          GIT_AUTHOR_EMAIL: github-actions[bot]@users.noreply.github.com
+          GIT_COMMITTER_NAME: github-actions[bot]
+          GIT_COMMITTER_EMAIL: github-actions[bot]@users.noreply.github.com
+        run: |
+          set -euo pipefail
+          branch="kernel-config-update/v${VERSION}-${GITHUB_RUN_ID}"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+          git checkout -b "$branch"
+          git add "configs/$VERSION"
+          git commit -m "configs: regenerate configs for Linux $VERSION"
+          git push origin "$branch"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Open the PR
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ steps.commit.outputs.branch }}
+        run: |
+          set -euo pipefail
+          body="Manually regenerated configs for Linux $VERSION.
+
+          This PR is not auto-merged -- review the diff against what's
+          currently committed for \`$VERSION\` (the \"Files changed\" tab) and
+          merge it by hand."
+
+          url="$(gh pr create \
+            --title "configs: regenerate Linux $VERSION" \
+            --body "$body" \
+            --head "$BRANCH" \
+            --base main)"
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+
+      - name: Approve pull_request runs for this commit
+        uses: ./.github/actions/approve-pr-runs
+        with:
+          sha: ${{ steps.commit.outputs.sha }}
+
+      - name: Comment a patch-application failure on the PR
+        if: steps.gen.outputs.patches-ok != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_URL: ${{ steps.pr.outputs.url }}
+          LOG_PATH: ${{ steps.gen.outputs.patches-log }}
+        run: |
+          set -euo pipefail
+          {
+            echo "### :warning: An out-of-tree patch failed to apply for Linux $VERSION"
+            echo
+            echo "Config generation above still used the unpatched tree, so the"
+            echo "configs in this PR may not reflect what the patch would have"
+            echo "changed. A maintainer needs to fix the patch before merging this."
+            echo
+            echo '<details><summary>Patch application output</summary>'
+            echo
+            echo '```'
+            cat "$LOG_PATH" 2>/dev/null || echo "(log not available)"
+            echo '```'
+            echo
+            echo '</details>'
+          } | gh pr comment "$PR_URL" --body-file -
