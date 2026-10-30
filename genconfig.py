@@ -389,11 +389,17 @@ def load_slices(flavor, *names):
     directory listing would put a load-bearing sequence at the mercy of
     alphabetical order.
 
-    Fragments live under this repository, so resolve via here() rather than a
-    bare relative path -- cwd is the kernel tree by the time we run."""
+    Fragments live next to the flavor's config.py: under this repository's
+    flavors/<flavor>/ normally, or wherever genconfig.sh was pointed at for a
+    flavor kept elsewhere ($GENCONFIG_FLAVOR_DIR). Either way resolve an
+    absolute path rather than a bare relative one -- cwd is the kernel tree by
+    the time we run."""
+    flavor_dir = os.environ.get("GENCONFIG_FLAVOR_DIR")
+    if not flavor_dir or os.path.basename(flavor_dir) != flavor:
+        flavor_dir = here("flavors", flavor)
     for name in names:
         kconf.load_config(
-            here("flavors", flavor, "config_slices", name + ".config"),
+            os.path.join(flavor_dir, "config_slices", name + ".config"),
             replace=False)
 
 

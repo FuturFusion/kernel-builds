@@ -17,7 +17,7 @@ with.
 | Path | What it is |
 | --- | --- |
 | `genconfig.py` | The library: Kconfig tree-walking machinery. Sets no symbols; not runnable on its own. |
-| `flavors/<name>/config.py` | A *flavor*: the policy for one kernel, that is, what to switch on and why. |
+| `flavors/<name>/config.py` | A *flavor*: the policy for one kernel, that is, what to switch on and why. A flavor can also live outside this repository, see [External flavors](#external-flavors). |
 | `flavors/<name>/config_slices/*.config` | The data half of that flavor: per-symbol policy no structural sweep can express. |
 | `genconfig.sh` | Entry point: `./genconfig.sh <arch> <flavor>`, both required. `<arch>` is a line from `arches` (`amd64`/`arm64`). |
 | `arches` | Architectures the tooling targets, one per line; every pipeline iterates it. |
@@ -156,6 +156,28 @@ cp -r flavors/generic flavors/server    # then trim flavors/server/
 A flavor loads the `config_slices/` sitting next to it. `config.py` derives its
 own name from its directory, so a copy needs no edit to point at the right
 fragments.
+
+### External flavors
+
+A flavor does not have to live under `flavors/`. Passing a path (anything
+containing a `/`) instead of a name selects a flavor directory kept elsewhere,
+typically inside the kernel tree it configures, with this repository used as
+tooling only:
+
+```sh
+./genconfig.sh amd64 ~/src/linux/flavors/mykernel
+./check_slices.py ~/src/linux/flavors/mykernel
+```
+
+The directory has the same shape (`config.py` plus `config_slices/`).
+`genconfig.sh` puts its own directory on `PYTHONPATH`, so such a `config.py`
+imports `genconfig` the same way an in-tree one does; the `sys.path` bootstrap
+at the top of the in-tree flavors is only needed when running one by hand
+without `genconfig.sh`. Output still lands in this repository
+(`generated_config-<flavor>-<arch>`, `output/<flavor>/<arch>/`), named after the
+directory's basename. External flavors are invisible to the discovery-driven
+CI here (`arches` times `flavors/`), which is the point: the kernel tree's own
+pipeline drives them.
 
 ## Normalization
 

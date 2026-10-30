@@ -9,6 +9,8 @@ the same symbol to different values is the whole point of having separate
 flavors, not a conflict.
 
 Usage: ./check_slices.py [flavor ...]     (default: every flavor present)
+A flavor is a name under flavors/, or a path (anything containing a '/') to a
+flavor directory kept outside this repository.
 Exit status: 0 clean, 1 if anything overlaps.
 """
 import collections
@@ -29,15 +31,19 @@ if not flavors:
 
 failed = False
 for flavor in flavors:
+    if "/" in flavor:
+        flavor_dir = os.path.abspath(flavor)
+    else:
+        flavor_dir = os.path.join(FLAVOR_DIR, flavor)
     files = sorted(glob.glob(
-        os.path.join(FLAVOR_DIR, flavor, "config_slices", "*.config")))
+        os.path.join(flavor_dir, "config_slices", "*.config")))
     if not files:
         print(f"{flavor}: no *.config files -- nothing to check")
         continue
 
     occ = collections.defaultdict(list)
     for f in files:
-        rel = os.path.relpath(f, SCRIPT_DIR)
+        rel = os.path.relpath(f, os.path.dirname(flavor_dir))
         with open(f) as fh:
             for n, line in enumerate(fh, 1):
                 s = line.strip()
