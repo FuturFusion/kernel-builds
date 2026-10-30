@@ -154,7 +154,10 @@ jobs:
             xz-utils \
             zstd
 
-          sudo apt-get install --yes pahole || true
+          # Not optional: without pahole, config generation refuses to run
+          # (kconf-run.sh) and a real build would drop BTF. The package is
+          # named pahole on current Debian/Ubuntu, dwarves on older ones.
+          sudo apt-get install --yes pahole || sudo apt-get install --yes dwarves
 
       # Building a .deb with `make deb-pkg` needs an actual git tree, not just
       # an extracted tarball -- dpkg-source/the kernel's packaging scripts

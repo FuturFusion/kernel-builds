@@ -89,10 +89,12 @@ sudo apt install build-essential flex bison bc libelf-dev libssl-dev \
                  dwarves python3
 ```
 
-`dwarves` provides `pahole`, which gates `DEBUG_INFO_BTF` and everything
-downstream of it. Note that `kconf-run.sh` currently hardcodes
-`PAHOLE_VERSION=130` as a temporary workaround for build hosts without pahole
-installed; drop that override once you have pahole >= 1.26.
+`dwarves` (named `pahole` on current Debian/Ubuntu) provides `pahole`, which
+gates `DEBUG_INFO_BTF` and everything downstream of it. It is mandatory:
+`kconf-run.sh` refuses to run without it, because a missing pahole would
+otherwise silently turn BTF off in the generated config. To generate for a
+host other than the one you are on, pre-set `PAHOLE_VERSION=<n>` (the number
+`scripts/pahole-version.sh` prints, e.g. `130` for 1.30) in the environment.
 
 **4. Your `.env`.** The tooling reads a `.env` file that is deliberately not in
 git, because the paths are per-machine. Create it from the template before

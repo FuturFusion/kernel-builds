@@ -98,20 +98,32 @@ export KERNELVERSION
 # be present as environment variables rather than computed inline by a
 # Kconfig $(shell,...) macro. Without them, PAHOLE_VERSION-gated options
 # (e.g. DEBUG_INFO_BTF) show up as "non-int default (undefined)".
+#
+# A caller may pre-set PAHOLE_VERSION to generate for a toolchain other than
+# the local one; otherwise it is detected from $PAHOLE. Detection yielding 0
+# (no pahole installed) is fatal rather than a quiet fallback: init/Kconfig's
+# PAHOLE_VERSION default is literally this variable, so 0 silently resolves
+# DEBUG_INFO_BTF and everything gated on it to n, and the result looks like a
+# valid config with BTF deliberately left out.
 export PAHOLE="${PAHOLE:-pahole}"
-if [[ -x "$KERNEL_SRC/scripts/pahole-version.sh" ]]; then
-    PAHOLE_VERSION="$("$KERNEL_SRC/scripts/pahole-version.sh" "$PAHOLE" 2>/dev/null || echo 0)"
-    export PAHOLE_VERSION
-else
-    export PAHOLE_VERSION=0
+# (pahole-version.sh prints 0 AND exits 1 when pahole is missing, so no
+# `|| echo 0` fallback here: that would produce "0\n0". Anything that isn't a
+# plain integer is treated as 0.)
+if [[ -z "${PAHOLE_VERSION:-}" ]]; then
+    PAHOLE_VERSION=0
+    if [[ -x "$KERNEL_SRC/scripts/pahole-version.sh" ]]; then
+        PAHOLE_VERSION="$("$KERNEL_SRC/scripts/pahole-version.sh" "$PAHOLE" 2>/dev/null | head -n1 || true)"
+    fi
 fi
-# TEMPORARY: this build host has no pahole, so the detection above yields 0,
-# which forces DEBUG_INFO_BTF (and the whole BTF-dependent cluster) off and
-# diverges from zabbly-config, which was built WITH pahole. init/Kconfig's
-# PAHOLE_VERSION default is literally "$(PAHOLE_VERSION)" (this env var), so
-# hardcoding a recent version here makes those symbols resolve identically.
-# Drop this override once pahole >= 1.26 is installed on the build host.
-export PAHOLE_VERSION=130
+[[ "$PAHOLE_VERSION" =~ ^[0-9]+$ ]] || PAHOLE_VERSION=0
+export PAHOLE_VERSION
+if [[ "$PAHOLE_VERSION" -eq 0 ]]; then
+    echo "error: pahole not found ('$PAHOLE'), so PAHOLE_VERSION would be 0 and" >&2
+    echo "       DEBUG_INFO_BTF (plus everything depending on it) would silently" >&2
+    echo "       resolve to n. Install it (Debian/Ubuntu: pahole or dwarves), or" >&2
+    echo "       set PAHOLE_VERSION=<n> explicitly to generate for another host." >&2
+    exit 1
+fi
 CC_VERSION_TEXT="$("$CC" --version 2>/dev/null | head -n1)"
 export CC_VERSION_TEXT
 
