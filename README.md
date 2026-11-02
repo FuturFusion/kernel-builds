@@ -75,7 +75,10 @@ generated config is only meaningful for the tree it was generated against, since
 symbol names, defaults and dependencies all change between releases.
 
 ```sh
-git clone --depth 1 https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git ~/src/linux
+git clone --depth 1 https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git ~/src/linux
+cd ~/src/linux
+git fetch origin tag v7.2.15
+git checkout v7.2.15
 ```
 
 **3. Standard kernel build dependencies.** Even though nothing is compiled here,
